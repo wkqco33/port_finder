@@ -1,71 +1,131 @@
 # Port Finder
 
-특정 포트를 사용 중인 프로세스를 찾아내고 안전하게 종료할 수 있도록 도와주는 모던 C 기반의 유틸리티입니다.
+특정 포트를 사용 중인 프로세스를 찾아내고 안전하게 종료할 수 있도록 도와주는 크로스플랫폼 CLI 유틸리티입니다.
 
 ## 주요 기능
 
 - **포트 스캔**: 지정한 포트를 점유하고 있는 프로세스(PID)와 프로세스명을 빠르게 찾아냅니다.
-- **프로세스 종료**: 검색된 프로세스를 프롬프트를 통해 사용자 확인 후 안전하게 강제 종료(Kill)할 수 있습니다.
-- **모던 C 프로젝트**: C17 표준을 따르며 엄격한 컴파일러 경고 플래그와 안전한 데이터 타입 및 메모리 처리가 적용되어 있습니다.
+- **포트 범위 스캔**: `3000-4000`처럼 범위를 지정하여 사용 중인 포트를 한 번에 조회합니다.
+- **전체 목록 조회**: 현재 열려 있는 모든 포트와 프로세스를 테이블로 출력합니다.
+- **프로세스 종료**: 검색된 프로세스를 사용자 확인 후 안전하게 강제 종료(Kill)할 수 있습니다.
+- **Graceful 종료**: SIGTERM을 먼저 보내고 5초 후 응답 없으면 SIGKILL로 에스컬레이션합니다.
+- **JSON 출력**: 스크립트 자동화 파이프라인을 위한 JSON 형식 출력을 지원합니다.
+- **크로스플랫폼**: Linux, macOS, Windows 모두 지원합니다.
 
 ## 시스템 요구사항
 
-- Linux 운영체제 (내부적으로 `/proc` 파일 시스템을 조회합니다)
-- CMake 3.10 이상
-- GCC 또는 Clang 컴파일러 (C17 표준 지원)
+- Go 1.21 이상
 
-## 빌드 및 설치
+## 설치
 
-C/C++ 프로젝트에서는 CMake를 통한 빌드가 표준적으로 자리 잡았으나, 사용자의 편의를 위해 자주 사용하는 명령(build, clean, install 등)을 래핑한 **Makefile**을 제공하는 것이 매우 보편적이고 좋은 관행입니다.
+### ppm (추천)
 
 ```bash
-# 코드 저장소 복제 (또는 디렉터리로 이동)
-cd port_finder
-
-# Makefile을 통한 전체 빌드
-make
-
-# 기존 빌드 결과물 삭제
-make clean
-
-# 시스템에 설치 (기본적으로 /usr/local/bin 에 설치됨, sudo 필요)
-make install
-
-# 시스템에서 설치 제거 (sudo 필요)
-make uninstall
+ppm install wkqco33/port_finder
 ```
 
-> **참고:** Makefile은 내부적으로 `cmake -B build` 와 `cmake --build build` 를 호출하여 작동합니다.
+### 직접 빌드
+
+```bash
+git clone https://github.com/wkqco33/port_finder.git
+cd port_finder
+
+# 빌드 (./port_finder 생성)
+make
+
+# ~/.local/bin 에 설치
+make install
+
+# 설치 제거
+make uninstall
+
+# 빌드 결과물 삭제
+make clean
+```
 
 ## 사용법
 
-기본적인 사용법은 다음과 같습니다:
-
 ```bash
-# 도움말 출력
-./build/port_finder -h
+port_finder [flags]
 
-# 포트 번호를 지정하여 프로세스 검색 (예: 8080 포트)
-./build/port_finder -p 8080
+Flags:
+  -p, --port string   검색할 포트 번호 또는 범위 (예: 8080, 3000-4000)
+  -f, --force         확인 없이 즉시 프로세스 종료
+  -l, --list          현재 사용 중인 모든 포트 목록 출력
+  -j, --json          JSON 형식으로 출력
+  -g, --graceful      SIGTERM 후 5초 대기, 이후 SIGKILL (Graceful 종료)
+  -v, --version       버전 출력
+  -h, --help          도움말 출력
 ```
 
 ### 실행 예시
 
-```text
-$ ./build/port_finder -p 8080
-포트 8080 사용 중인 프로세스 검색 중...
-발견! 포트 8080를 사용 중인 프로세스 정보:
-    - PID  : 1234
-    - NAME : node
+#### **단일 포트 검색 및 종료**
 
-[*] 해당 프로세스를 종료하시겠습니까? (y/N): y
-PID 1234 프로세스를 성공적으로 종료했습니다.
+```text
+$ port_finder -p 8080
+🔍 포트 8080 사용 중인 프로세스를 검색 중입니다...
+
+✨ 발견! 프로세스 상세 정보
+   • PID        : 1234
+   • NAME       : node
+   • PORT       : 8080
+
+🔥 해당 프로세스를 즉시 종료하시겠습니까? (y/N): y
+
+✅ PID 1234 프로세스가 안전하게 종료되었습니다.
+```
+
+#### **범위 스캔**
+
+```bash
+# 3000~9000 범위에서 사용 중인 포트 조회
+port_finder -p 3000-9000
+
+# 범위 내 모든 프로세스 확인 없이 즉시 종료
+port_finder -p 3000-9000 -f
+```
+
+#### **전체 포트 목록**
+
+```bash
+# 테이블 형식으로 출력
+port_finder -l
+
+# JSON 형식으로 출력 (jq 등과 조합 가능)
+port_finder -l -j | jq '.[] | select(.name == "node")'
+```
+
+#### **Graceful 종료**
+
+```bash
+# SIGTERM → 5초 대기 → SIGKILL 순으로 안전 종료
+port_finder -p 8080 -g
+```
+
+#### **확인 없이 즉시 종료 (스크립트 자동화)**
+
+```bash
+port_finder -p 8080 -f
+```
+
+#### **JSON 출력**
+
+```bash
+$ port_finder -p 8080 -j
+[
+  {
+    "port": 8080,
+    "pid": 1234,
+    "name": "node"
+  }
+]
 ```
 
 ## 디렉터리 구조
 
-- `src/` : 기본 소스 코드 (.c)
-- `include/` : 헤더 파일 (.h)
-- `build/` : CMake 및 Make를 통한 빌드 결과물 디렉터리
-- `CMakeLists.txt` : CMake 빌드 구성 파일
-- `Makefile` : 편리한 빌드 관리를 위한 명령어 래퍼
+- `main.go` : 진입점
+- `cmd/` : CLI 커맨드 정의 (cobra)
+- `pkg/port/` : 포트 조회 및 프로세스 종료 로직
+- `Makefile` : 빌드/설치/제거 명령어 래퍼
+- `ppm.json` : ppm 패키지 메타데이터

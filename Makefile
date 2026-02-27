@@ -1,28 +1,36 @@
-.PHONY: all build clean target
+BINARY  := port_finder
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS := -ldflags="-s -w -X port-finder/cmd.Version=$(VERSION)"
 
-BUILD_DIR = build
+INSTALL_DIR := $(HOME)/.local/bin
+
+.PHONY: all build clean install uninstall test
 
 all: build
 
+## build: 바이너리 빌드 (./port_finder)
 build:
-	@echo "==> Configuring and building with CMake..."
-	@cmake -B $(BUILD_DIR)
-	@cmake --build $(BUILD_DIR)
+	go build $(LDFLAGS) -o $(BINARY) .
 
+## clean: 빌드 결과물 삭제
 clean:
-	@echo "==> Cleaning build directory..."
-	@rm -rf $(BUILD_DIR)
+	rm -f $(BINARY)
 
+## install: ~/.local/bin 에 설치
 install: build
-	@echo "==> Installing port_finder to system..."
-	@sudo cmake --install $(BUILD_DIR)
+	@mkdir -p $(INSTALL_DIR)
+	cp $(BINARY) $(INSTALL_DIR)/$(BINARY)
+	@echo "설치 완료: $(INSTALL_DIR)/$(BINARY)"
 
+## uninstall: ~/.local/bin 에서 제거
 uninstall:
-	@echo "==> Uninstalling port_finder from system..."
-	@if [ -f $(BUILD_DIR)/install_manifest.txt ]; then \
-		sudo xargs rm -f < $(BUILD_DIR)/install_manifest.txt; \
-	else \
-		echo "설치 기록(install_manifest.txt)을 찾을 수 없습니다. (make install을 먼저 실행했는지 확인해주세요.)" >&2; \
-	fi
+	rm -f $(INSTALL_DIR)/$(BINARY)
+	@echo "제거 완료: $(INSTALL_DIR)/$(BINARY)"
 
-rebuild: clean build
+## test: 유닛 테스트 실행
+test:
+	go test ./... -v
+
+## help: 사용 가능한 명령 목록 출력
+help:
+	@grep -E '^## ' Makefile | sed 's/## /  make /'

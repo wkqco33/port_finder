@@ -1,0 +1,5 @@
+{
+  "description": "특정 포트를 사용 중인 프로세스를 찾아내고 안전하게 종료할 수 있는 크로스플랫폼 CLI 유틸리티",
+  "author": "wkqco33",
+  "homepage": "https://github.com/wkqco33/port_finder"
+}
