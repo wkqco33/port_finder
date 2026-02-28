@@ -1,4 +1,4 @@
-name: Release for port-finder
+name: Release for port_finder
 
 on:
   push:
@@ -38,13 +38,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
           cache: true
 
       - name: Build Binary
         shell: bash
         run: |
-          BINARY_NAME="port-finder-${{ matrix.goos }}-${{ matrix.goarch }}"
+          BINARY_NAME="port_finder_${{ matrix.goos }}_${{ matrix.goarch }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME="${BINARY_NAME}.exe"
           fi

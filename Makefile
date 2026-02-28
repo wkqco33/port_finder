@@ -1,6 +1,6 @@
 BINARY  := port_finder
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -ldflags="-s -w -X port-finder/cmd.Version=$(VERSION)"
+LDFLAGS := -ldflags="-s -w -X port_finder/cmd.Version=$(VERSION)"
 
 INSTALL_DIR := $(HOME)/.local/bin
 

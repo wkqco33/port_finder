@@ -1,4 +1,4 @@
-module port-finder
+module port_finder
 
 go 1.25.7
 

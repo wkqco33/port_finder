@@ -1,7 +1,7 @@
 package main
 
 import (
-	"port-finder/cmd"
+	"port_finder/cmd"
 )
 
 func main() {
