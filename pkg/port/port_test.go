@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	portpkg "port-finder/pkg/port"
+	portpkg "port_finder/pkg/port"
 )
 
 // listenTCP는 임의의 포트로 TCP 리스너를 열고, 실제 바인딩된 포트 번호를 반환합니다.

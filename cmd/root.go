@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"port-finder/pkg/port"
+	"port_finder/pkg/port"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
