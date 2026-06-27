@@ -37,7 +37,7 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "port_finder",
+	Use:     "poff",
 	Version: Version,
 	Short:   "포트를 사용하는 프로세스를 찾아 종료하는 유틸리티",
 	Long: `지정한 포트 번호를 사용하는 프로세스의 정보를 보여주고,
@@ -62,16 +62,17 @@ var rootCmd = &cobra.Command{
 
 // ParsePortArg는 "8080" 또는 "3000-4000" 형식의 문자열을 파싱합니다.
 func ParsePortArg(s string) (start, end uint16, err error) {
+	s = strings.TrimSpace(s)
 	parts := strings.SplitN(s, "-", 2)
 	if len(parts) == 1 {
-		n, e := strconv.ParseUint(parts[0], 10, 16)
+		n, e := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 16)
 		if e != nil || n == 0 {
 			return 0, 0, fmt.Errorf("유효하지 않은 포트 번호: %s", s)
 		}
 		return uint16(n), uint16(n), nil
 	}
-	lo, e1 := strconv.ParseUint(parts[0], 10, 16)
-	hi, e2 := strconv.ParseUint(parts[1], 10, 16)
+	lo, e1 := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 16)
+	hi, e2 := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 16)
 	if e1 != nil || e2 != nil || lo == 0 || hi == 0 || lo > hi {
 		return 0, 0, fmt.Errorf("유효하지 않은 포트 범위: %s (예: 3000-4000)", s)
 	}
@@ -101,30 +102,32 @@ func runSinglePort(p uint16) error {
 	fmt.Printf("%s %s %d %s\n",
 		headerStyle("🔍"), warnStyle("포트"), p, warnStyle("사용 중인 프로세스를 검색 중입니다..."))
 
-	info, err := port.FindByPort(p)
+	infos, err := port.FindByPort(p)
 	if err != nil {
 		return err
 	}
-	if info == nil {
+	if len(infos) == 0 {
 		fmt.Printf("%s 포트 %d를 사용하는 프로세스를 찾을 수 없습니다.\n", warnStyle("⚠️"), p)
 		return nil
 	}
 
 	if jsonOut {
-		return printJSON([]*port.ProcessInfo{info})
+		return printJSON(infos)
 	}
 
 	fmt.Println()
 	fmt.Printf("%s %s\n", successStyle("✨ 발견!"), valueStyle("프로세스 상세 정보"))
-	fmt.Printf("   %s %-10s : %s\n", keyStyle("•"), "PID", valueStyle(fmt.Sprintf("%d", info.PID)))
-	fmt.Printf("   %s %-10s : %s\n", keyStyle("•"), "NAME", valueStyle(info.Name))
-	fmt.Printf("   %s %-10s : %s\n", keyStyle("•"), "PORT", valueStyle(fmt.Sprintf("%d", info.Port)))
-	fmt.Println()
+	for _, info := range infos {
+		fmt.Printf("   %s %-10s : %s\n", keyStyle("•"), "PID", valueStyle(fmt.Sprintf("%d", info.PID)))
+		fmt.Printf("   %s %-10s : %s\n", keyStyle("•"), "NAME", valueStyle(info.Name))
+		fmt.Printf("   %s %-10s : %s\n", keyStyle("•"), "PORT", valueStyle(fmt.Sprintf("%d", info.Port)))
+		fmt.Println()
+	}
 
 	if !forceKill {
 		fmt.Printf("%s %s %s",
 			promptStyle("🔥"),
-			errorStyle("해당 프로세스를 즉시 종료하시겠습니까?"),
+			errorStyle("해당 프로세스들을 즉시 종료하시겠습니까?"),
 			warnStyle("(y/N): "))
 		if !readConfirm() {
 			fmt.Printf("\n%s %s\n", warnStyle("ℹ️"), valueStyle("프로세스 종료가 취소되었습니다."))
@@ -132,11 +135,13 @@ func runSinglePort(p uint16) error {
 		}
 	}
 
-	if err := killWith(info.PID); err != nil {
-		fmt.Fprintf(os.Stderr, "\n%s %v\n", errorStyle("❌ 종료 실패:"), err)
-		os.Exit(1)
+	for _, info := range infos {
+		if err := killWith(info.PID); err != nil {
+			fmt.Fprintf(os.Stderr, "\n%s PID %d %v\n", errorStyle("❌ 종료 실패:"), info.PID, err)
+		} else {
+			fmt.Printf("\n%s PID %d %s\n", successStyle("✅"), info.PID, valueStyle("프로세스가 안전하게 종료되었습니다."))
+		}
 	}
-	fmt.Printf("\n%s PID %d %s\n", successStyle("✅"), info.PID, valueStyle("프로세스가 안전하게 종료되었습니다."))
 	return nil
 }
 
@@ -171,7 +176,7 @@ func runPortRange(start, end uint16) error {
 			}
 		}
 	} else {
-		fmt.Printf("%s\n", dimStyle("특정 포트를 종료하려면: port_finder -p <PORT> [-f]"))
+		fmt.Printf("%s\n", dimStyle("특정 포트를 종료하려면: poff -p <PORT> [-f]"))
 	}
 	return nil
 }

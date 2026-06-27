@@ -1,4 +1,4 @@
-name: Release for port_finder
+name: Release for poff
 
 on:
   push:
@@ -44,7 +44,7 @@ jobs:
       - name: Build Binary
         shell: bash
         run: |
-          BINARY_NAME="port_finder_${{ matrix.goos }}_${{ matrix.goarch }}"
+          BINARY_NAME="poff_${{ matrix.goos }}_${{ matrix.goarch }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME="${BINARY_NAME}.exe"
           fi

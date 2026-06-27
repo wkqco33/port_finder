@@ -1,4 +1,4 @@
-# Port Finder
+# poff (Port Finder)
 
 특정 포트를 사용 중인 프로세스를 찾아내고 안전하게 종료할 수 있도록 도와주는 크로스플랫폼 CLI 유틸리티입니다.
 
@@ -30,23 +30,23 @@ ppm install wkqco33/port_finder
 git clone https://github.com/wkqco33/port_finder.git
 cd port_finder
 
-# 빌드 (./port_finder 생성)
-make
+# 빌드 (port_finder 또는 port_finder.exe 생성)
+task build
 
 # ~/.local/bin 에 설치
-make install
+task install
 
 # 설치 제거
-make uninstall
+task uninstall
 
 # 빌드 결과물 삭제
-make clean
+task clean
 ```
 
 ## 사용법
 
 ```bash
-port_finder [flags]
+poff [flags]
 
 Flags:
   -p, --port string   검색할 포트 번호 또는 범위 (예: 8080, 3000-4000)
@@ -63,7 +63,7 @@ Flags:
 #### **단일 포트 검색 및 종료**
 
 ```text
-$ port_finder -p 8080
+$ poff -p 8080
 🔍 포트 8080 사용 중인 프로세스를 검색 중입니다...
 
 ✨ 발견! 프로세스 상세 정보
@@ -71,7 +71,7 @@ $ port_finder -p 8080
    • NAME       : node
    • PORT       : 8080
 
-🔥 해당 프로세스를 즉시 종료하시겠습니까? (y/N): y
+🔥 해당 프로세스들을 즉시 종료하시겠습니까? (y/N): y
 
 ✅ PID 1234 프로세스가 안전하게 종료되었습니다.
 ```
@@ -80,39 +80,39 @@ $ port_finder -p 8080
 
 ```bash
 # 3000~9000 범위에서 사용 중인 포트 조회
-port_finder -p 3000-9000
+poff -p 3000-9000
 
 # 범위 내 모든 프로세스 확인 없이 즉시 종료
-port_finder -p 3000-9000 -f
+poff -p 3000-9000 -f
 ```
 
 #### **전체 포트 목록**
 
 ```bash
 # 테이블 형식으로 출력
-port_finder -l
+poff -l
 
 # JSON 형식으로 출력 (jq 등과 조합 가능)
-port_finder -l -j | jq '.[] | select(.name == "node")'
+poff -l -j | jq '.[] | select(.name == "node")'
 ```
 
 #### **Graceful 종료**
 
 ```bash
 # SIGTERM → 5초 대기 → SIGKILL 순으로 안전 종료
-port_finder -p 8080 -g
+poff -p 8080 -g
 ```
 
 #### **확인 없이 즉시 종료 (스크립트 자동화)**
 
 ```bash
-port_finder -p 8080 -f
+poff -p 8080 -f
 ```
 
 #### **JSON 출력**
 
 ```bash
-$ port_finder -p 8080 -j
+$ poff -p 8080 -j
 [
   {
     "port": 8080,
@@ -127,5 +127,5 @@ $ port_finder -p 8080 -j
 - `main.go` : 진입점
 - `cmd/` : CLI 커맨드 정의 (cobra)
 - `pkg/port/` : 포트 조회 및 프로세스 종료 로직
-- `Makefile` : 빌드/설치/제거 명령어 래퍼
+- `Taskfile.yml` : 빌드/설치/제거 명령어 래퍼 (Task)
 - `ppm.json` : ppm 패키지 메타데이터

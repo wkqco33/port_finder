@@ -39,38 +39,44 @@ func TestFindByPort_Found(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	info, err := portpkg.FindByPort(port)
+	infos, err := portpkg.FindByPort(port)
 	if err != nil {
 		t.Fatalf("FindByPort 오류: %v", err)
 	}
-	if info == nil {
+	if len(infos) == 0 {
 		t.Fatalf("포트 %d를 사용하는 프로세스를 찾지 못했습니다 (예상: 현재 프로세스)", port)
 	}
 
 	wantPID := int32(os.Getpid())
-	if info.PID != wantPID {
-		t.Errorf("PID = %d, 기대값 = %d", info.PID, wantPID)
+	found := false
+	for _, info := range infos {
+		if info.PID == wantPID {
+			found = true
+			if info.Port != port {
+				t.Errorf("Port = %d, 기대값 = %d", info.Port, port)
+			}
+			if info.Name == "" {
+				t.Error("프로세스 이름이 비어 있습니다")
+			}
+		}
 	}
-	if info.Port != port {
-		t.Errorf("Port = %d, 기대값 = %d", info.Port, port)
-	}
-	if info.Name == "" {
-		t.Error("프로세스 이름이 비어 있습니다")
+	if !found {
+		t.Errorf("예상되는 PID %d를 찾을 수 없습니다. 결과: %+v", wantPID, infos)
 	}
 }
 
-// TestFindByPort_NotFound는 사용하지 않는 포트에 대해 nil을 반환하는지 검증합니다.
+// TestFindByPort_NotFound는 사용하지 않는 포트에 대해 빈 결과를 반환하는지 검증합니다.
 func TestFindByPort_NotFound(t *testing.T) {
 	ln, port := listenTCP(t)
 	ln.Close()
 	time.Sleep(50 * time.Millisecond)
 
-	info, err := portpkg.FindByPort(port)
+	infos, err := portpkg.FindByPort(port)
 	if err != nil {
 		t.Fatalf("FindByPort 오류: %v", err)
 	}
-	if info != nil {
-		t.Errorf("사용하지 않는 포트 %d에서 프로세스가 감지됨 (PID=%d)", port, info.PID)
+	if len(infos) != 0 {
+		t.Errorf("사용하지 않는 포트 %d에서 프로세스가 감지됨: %+v", port, infos)
 	}
 }
 

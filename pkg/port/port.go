@@ -28,17 +28,15 @@ func getProcessName(pid int32) string {
 	return name
 }
 
-// FindByPort는 특정 포트를 사용하는 프로세스를 검색하여 반환합니다.
-// 찾지 못한 경우 nil, nil을 반환합니다.
-func FindByPort(targetPort uint16) (*ProcessInfo, error) {
-	results, err := FindByPortRange(targetPort, targetPort)
-	if err != nil {
-		return nil, err
-	}
-	if len(results) == 0 {
-		return nil, nil
-	}
-	return results[0], nil
+type portPid struct {
+	port uint16
+	pid  int32
+}
+
+// FindByPort는 특정 포트를 사용하는 모든 프로세스를 검색하여 반환합니다.
+// 찾지 못한 경우 빈 슬라이스와 nil을 반환합니다.
+func FindByPort(targetPort uint16) ([]*ProcessInfo, error) {
+	return FindByPortRange(targetPort, targetPort)
 }
 
 // FindByPortRange는 start~end 범위 안에서 사용 중인 포트의 프로세스를 모두 반환합니다.
@@ -48,18 +46,32 @@ func FindByPortRange(start, end uint16) ([]*ProcessInfo, error) {
 		return nil, fmt.Errorf("네트워크 정보를 가져올 수 없습니다: %w", err)
 	}
 
-	seen := make(map[uint16]bool)
+	seen := make(map[portPid]bool)
 	var results []*ProcessInfo
+
+	nameCache := make(map[int32]string)
+	getProcName := func(pid int32) string {
+		if name, ok := nameCache[pid]; ok {
+			return name
+		}
+		name := getProcessName(pid)
+		nameCache[pid] = name
+		return name
+	}
 
 	for i := range conns {
 		p := uint16(conns[i].Laddr.Port)
-		if p < start || p > end || seen[p] || conns[i].Pid <= 0 {
+		if p < start || p > end || conns[i].Pid <= 0 {
 			continue
 		}
-		seen[p] = true
+		key := portPid{port: p, pid: conns[i].Pid}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		results = append(results, &ProcessInfo{
 			PID:  conns[i].Pid,
-			Name: getProcessName(conns[i].Pid),
+			Name: getProcName(conns[i].Pid),
 			Port: p,
 		})
 	}
