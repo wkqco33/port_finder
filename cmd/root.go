@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -231,10 +233,64 @@ func Execute() {
 }
 
 func init() {
+	if Version == "1.0.0" {
+		Version = resolveVersion()
+	}
+	rootCmd.Version = Version
+
 	rootCmd.Flags().StringVarP(&portStr, "port", "p", "", "검색할 포트 번호 또는 범위 (예: 8080, 3000-4000)")
 	rootCmd.Flags().BoolVarP(&forceKill, "force", "f", false, "확인 없이 즉시 프로세스 종료")
 	rootCmd.Flags().BoolVarP(&listMode, "list", "l", false, "현재 사용 중인 모든 포트 목록 출력")
 	rootCmd.Flags().BoolVarP(&jsonOut, "json", "j", false, "JSON 형식으로 출력")
 	rootCmd.Flags().BoolVarP(&graceful, "graceful", "g", false, "SIGTERM 후 5초 대기, 이후 SIGKILL (Graceful 종료)")
 	rootCmd.Flags().BoolP("version", "v", false, "버전 출력")
+}
+
+func resolveVersion() string {
+	// 1. debug.ReadBuildInfo()를 통해 go install 등으로 설치된 경우의 버전 확인
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			return info.Main.Version
+		}
+	}
+
+	// 2. git describe --tags --always --dirty 실행 시도
+	if gitVer, err := getVersionFromGit(); err == nil && gitVer != "" {
+		return gitVer
+	}
+
+	// 3. 깃이 없거나 실패한 경우, debug.ReadBuildInfo()의 vcs.revision 정보를 기반으로 표시
+	if info, ok := debug.ReadBuildInfo(); ok {
+		var revision string
+		var modified bool
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				revision = setting.Value
+			case "vcs.modified":
+				modified = setting.Value == "true"
+			}
+		}
+		if revision != "" {
+			if len(revision) > 7 {
+				revision = revision[:7]
+			}
+			if modified {
+				revision += "-dirty"
+			}
+			return "dev-" + revision
+		}
+	}
+
+	// 4. 모두 실패하면 기본값 반환
+	return "1.0.0"
+}
+
+func getVersionFromGit() (string, error) {
+	cmd := exec.Command("git", "describe", "--tags", "--always", "--dirty")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
