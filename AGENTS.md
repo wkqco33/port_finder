@@ -18,7 +18,7 @@
 main.go            진입점 (cmd.Execute() 호출만)
 cmd/               CLI 레이어 — wcli 명령 정의 + 입출력/흐름 오케스트레이션
 pkg/port/          도메인 로직 — 포트 조회/프로세스 종료 (gopsutil 격리)
-.github/workflows/  CI 테스트 게이트 (test.yml) + 릴리스 (release.yml)
+.github/workflows/  CI 게이트 (ci.yml) + 릴리스 (release.yml)
 Taskfile.yml       빌드/테스트 태스크 래퍼
 ```
 
@@ -86,10 +86,10 @@ task test:all         # 둘 다
 task test:coverage    # 커버리지
 ```
 
-## CI 게이트 (.github/workflows/test.yml)
+## CI 게이트 (.github/workflows/ci.yml)
 
-- PR 및 main 푸시 시: `go vet` → `-race` 단위 테스트 → 커버리지 요약 → ubuntu 통합 테스트.
-- 릴리스는 별도 `release.yml` (태그 `v*`).
+- PR 및 main/master 푸시 시: `gofmt` 포맷 검증 → `go vet` 정적 분석 → 빌드 → `-race` 단위 테스트(커버리지 요약) → ubuntu 통합 테스트.
+- 릴리스는 별도 `release.yml` — 버전 태그(`v*`) 푸시 시 트리거되어 ppm 배포 규약(`{bin_name}_{os}_{arch}.tar.gz|.zip`)에 맞는 아카이브와 `.sha256` 체크섬을 생성한다.
 
 ## 코드 스타일
 

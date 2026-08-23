@@ -1,35 +1,40 @@
-name: Release for poff
+name: Release
 
+# 버전 태그(v* ) 푸시 시 실행되어 ppm 배포 규약에 맞는 바이너리 아카이브와 체크섬을 빌드합니다.
+# - 빌드 산출물: {bin_name}_{os}_{arch}.tar.gz|.zip (ppm 자동 탐색 명명 규칙)
+# - 검증 산출물: 각 아카이브의 SHA-256 체크섬(.sha256)
+# 참고: 자산 명명 규칙 및 무결성 검증에 대한 상세는 PACKAGE_GUIDE.md 참조.
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build Binary
-    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            goos: linux
+          - goos: linux
             goarch: amd64
-          - os: ubuntu-latest
-            goos: linux
+            ext: tar.gz
+          - goos: linux
             goarch: arm64
-          - os: windows-latest
-            goos: windows
+            ext: tar.gz
+          - goos: darwin
             goarch: amd64
-          - os: macos-latest
-            goos: darwin
-            goarch: amd64
-          - os: macos-latest
-            goos: darwin
+            ext: tar.gz
+          - goos: darwin
             goarch: arm64
+            ext: tar.gz
+          - goos: windows
+            goarch: amd64
+            ext: zip
 
     steps:
       - name: Checkout code
@@ -38,31 +43,58 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: "1.25"
           cache: true
 
-      - name: Build Binary
+      - name: Build and package binary
         shell: bash
         run: |
-          BINARY_NAME="poff_${{ matrix.goos }}_${{ matrix.goarch }}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME="${BINARY_NAME}.exe"
-          fi
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -ldflags="-s -w -X port_finder/cmd.Version=${{ github.ref_name }}" -o "$BINARY_NAME" main.go
-          echo "BINARY_PATH=$BINARY_NAME" >> $GITHUB_ENV
+          set -euo pipefail
 
-      - name: Upload Artifact
+          VERSION="${{ github.ref_name }}"
+          OS="${{ matrix.goos }}"
+          ARCH="${{ matrix.goarch }}"
+          EXT="${{ matrix.ext }}"
+          BIN_NAME="poff"
+
+          # 실행 파일 확장자 (Windows)
+          EXE="${BIN_NAME}"
+          if [ "$OS" = "windows" ]; then
+            EXE="${BIN_NAME}.exe"
+          fi
+
+          # 스테이징 디렉토리에 바이너리 빌드
+          STAGE="stage_${OS}_${ARCH}"
+          mkdir -p "${STAGE}"
+          GOOS="$OS" GOARCH="$ARCH" go build -trimpath -ldflags="-s -w -X port_finder/cmd.Version=${VERSION}" -o "${STAGE}/${EXE}" main.go
+
+          # 아카이브 생성 (tar.gz / zip)
+          ASSET="${BIN_NAME}_${OS}_${ARCH}.${EXT}"
+          if [ "$EXT" = "zip" ]; then
+            (cd "${STAGE}" && zip -r -9 "../${ASSET}" "${EXE}")
+          else
+            tar -C "${STAGE}" -czf "${ASSET}" "${EXE}"
+          fi
+
+          # SHA-256 체크섬 생성 (해시 + 파일명 형식)
+          sha256sum "${ASSET}" > "${ASSET}.sha256"
+          echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
+          echo "ASSET_PATH=$(pwd)/${ASSET}" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ env.BINARY_PATH }}
+          name: asset-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
+          if-no-files-found: error
           retention-days: 1
 
   release:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -71,10 +103,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ./dist
-          pattern: binaries-*
+          pattern: asset-*
           merge-multiple: true
 
-      - name: List binaries
+      - name: List assets
         run: ls -R ./dist
 
       - name: Release

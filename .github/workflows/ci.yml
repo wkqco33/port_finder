@@ -1,0 +1,83 @@
+name: CI
+
+# CI 게이트: PR 및 main/master 푸시 시 린트 · 포맷 · 빌드 · 테스트를 순차 검증합니다.
+# - lint : go vet(정적 분석) + gofmt(포맷) 검증 — 품질 게이트의 1단계
+# - unit : hermetic 단위 테스트 (fast, OS 비의존) + race + 커버리지 — 회귀 방지 주 게이트
+# - integration : 실제 OS 의존 통합 테스트 (ubuntu) — 느리므로 best-effort
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Format check (gofmt)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "❌ gofmt 미준수 파일:"
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "✅ gofmt 준수"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+  unit:
+    name: Unit tests (hermetic)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Unit tests with race + coverage
+        run: |
+          go test ./... -race -coverprofile=coverage.out -covermode=atomic
+          go tool cover -func=coverage.out | tail -1
+
+  integration:
+    name: Integration tests (real OS)
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Integration tests
+        run: go test -tags integration ./pkg/port/ -count=1 -v
