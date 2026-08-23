@@ -1,0 +1,52 @@
+name: CI (Tests)
+
+# PR와 메인 브랜치 푸시 시 테스트 게이트를 실행합니다.
+# - go vet : 정적 분석
+# - hermetic 단위 테스트 (fast, OS 비의존) : 회귀 방지의 주 게이트
+# - 통합 테스트 : 실제 OS 의존 (ubuntu) — 느리므로 best-effort로 실행
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests (hermetic)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit tests with race + coverage
+        run: |
+          go test ./... -race -coverprofile=coverage.out -covermode=atomic
+          go tool cover -func=coverage.out | tail -1
+
+  integration:
+    name: Integration tests (real OS)
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Integration tests
+        run: go test -tags integration ./pkg/port/ -count=1 -v

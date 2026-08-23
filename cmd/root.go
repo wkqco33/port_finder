@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime/debug"
@@ -14,7 +15,7 @@ import (
 	"port_finder/pkg/port"
 
 	"github.com/fatih/color"
-	"github.com/spf13/cobra"
+	"github.com/wkqco33/wcli"
 )
 
 var Version = "1.0.0"
@@ -38,28 +39,75 @@ var (
 	dimStyle     = color.New(color.Faint).SprintFunc()
 )
 
-var rootCmd = &cobra.Command{
+// portOps는 CLI가 사용하는 port 패키지의 표면입니다.
+// 테스트에서 페이크로 대체할 수 있어 cmd 로직을 격리해서 검증할 수 있습니다.
+type portOps interface {
+	FindByPort(target uint16) ([]*port.ProcessInfo, error)
+	FindByPortRange(start, end uint16) ([]*port.ProcessInfo, error)
+	ListAll() ([]*port.ProcessInfo, error)
+	KillProcessByPID(pid int32) error
+	KillProcessGracefully(pid int32, timeout time.Duration) error
+}
+
+// App은 CLI가 갖는 모든 외부 의존성(입출력 스트림 + 포트 연산)을 한곳에 모은 구조체입니다.
+// 스트림과 ops를 주입할 수 있어 단위 테스트에서 bytes.Buffer/페이크로 검증할 수 있습니다.
+type App struct {
+	Out  io.Writer
+	ErrW io.Writer
+	In   io.Reader
+
+	Ops portOps
+
+	PortStr   string
+	ForceKill bool
+	ListMode  bool
+	JSON      bool
+	Graceful  bool
+}
+
+// newApp은 cobra 플래그와 실제 프로세스 스트림으로 App을 구성합니다.
+func newApp() *App {
+	return &App{
+		Out:  os.Stdout,
+		ErrW: os.Stderr,
+		In:   os.Stdin,
+		Ops:  port.NewFinder(),
+
+		PortStr:   portStr,
+		ForceKill: forceKill,
+		ListMode:  listMode,
+		JSON:      jsonOut,
+		Graceful:  graceful,
+	}
+}
+
+// Run은 플래그 상태에 따라 목록/단일/범위 실행을 디스패치합니다.
+// help는 인자가 없을 때 호출할 헬프 함수입니다 (테스트에서는 무시 가능한 함수 전달).
+func (a *App) Run(help func() error) error {
+	if a.ListMode {
+		return a.runList()
+	}
+	if a.PortStr == "" {
+		return help()
+	}
+	start, end, err := ParsePortArg(a.PortStr)
+	if err != nil {
+		return err
+	}
+	if start == end {
+		return a.runSinglePort(start)
+	}
+	return a.runPortRange(start, end)
+}
+
+var rootCmd = &wcli.Command{
 	Use:     "poff",
 	Version: Version,
 	Short:   "포트를 사용하는 프로세스를 찾아 종료하는 유틸리티",
 	Long: `지정한 포트 번호를 사용하는 프로세스의 정보를 보여주고,
 사용자 확인 후 해당 프로세스를 즉시 종료할 수 있습니다.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if listMode {
-			return runList()
-		}
-		if portStr == "" {
-			return cmd.Help()
-		}
-		start, end, err := ParsePortArg(portStr)
-		if err != nil {
-			return err
-		}
-		if start == end {
-			return runSinglePort(start)
-		}
-		return runPortRange(start, end)
-	},
+	// SilenceErrors: wcli의 기본 에러 출력을 끄고 Execute()에서 직접 처리합니다.
+	SilenceErrors: true,
 }
 
 // ParsePortArg는 "8080" 또는 "3000-4000" 형식의 문자열을 파싱합니다.
@@ -83,117 +131,117 @@ func ParsePortArg(s string) (start, end uint16, err error) {
 
 // ─── 실행 흐름 ────────────────────────────────────────────────────────────────
 
-func runList() error {
-	infos, err := port.ListAll()
+func (a *App) runList() error {
+	infos, err := a.Ops.ListAll()
 	if err != nil {
 		return err
 	}
 	if len(infos) == 0 {
-		fmt.Println(warnStyle("ℹ️  사용 중인 포트가 없습니다."))
+		fmt.Fprintln(a.Out, warnStyle("ℹ️  사용 중인 포트가 없습니다."))
 		return nil
 	}
-	if jsonOut {
-		return printJSON(infos)
+	if a.JSON {
+		return a.printJSON(infos)
 	}
-	fmt.Printf("%s %s\n\n", headerStyle("📋"), headerStyle("현재 사용 중인 포트 목록"))
-	printTable(infos)
+	fmt.Fprintf(a.Out, "%s %s\n\n", headerStyle("📋"), headerStyle("현재 사용 중인 포트 목록"))
+	a.printTable(infos)
 	return nil
 }
 
-func runSinglePort(p uint16) error {
-	fmt.Printf("%s %s %d %s\n",
+func (a *App) runSinglePort(p uint16) error {
+	fmt.Fprintf(a.Out, "%s %s %d %s\n",
 		headerStyle("🔍"), warnStyle("포트"), p, warnStyle("사용 중인 프로세스를 검색 중입니다..."))
 
-	infos, err := port.FindByPort(p)
+	infos, err := a.Ops.FindByPort(p)
 	if err != nil {
 		return err
 	}
 	if len(infos) == 0 {
-		fmt.Printf("%s 포트 %d를 사용하는 프로세스를 찾을 수 없습니다.\n", warnStyle("⚠️"), p)
+		fmt.Fprintf(a.Out, "%s 포트 %d를 사용하는 프로세스를 찾을 수 없습니다.\n", warnStyle("⚠️"), p)
 		return nil
 	}
 
-	if jsonOut {
-		return printJSON(infos)
+	if a.JSON {
+		return a.printJSON(infos)
 	}
 
-	fmt.Println()
-	fmt.Printf("%s %s\n", successStyle("✨ 발견!"), valueStyle("프로세스 상세 정보"))
+	fmt.Fprintln(a.Out)
+	fmt.Fprintf(a.Out, "%s %s\n", successStyle("✨ 발견!"), valueStyle("프로세스 상세 정보"))
 	for _, info := range infos {
-		fmt.Printf("   %s %-10s : %s\n", keyStyle("•"), "PID", valueStyle(fmt.Sprintf("%d", info.PID)))
-		fmt.Printf("   %s %-10s : %s\n", keyStyle("•"), "NAME", valueStyle(info.Name))
-		fmt.Printf("   %s %-10s : %s\n", keyStyle("•"), "PORT", valueStyle(fmt.Sprintf("%d", info.Port)))
-		fmt.Println()
+		fmt.Fprintf(a.Out, "   %s %-10s : %s\n", keyStyle("•"), "PID", valueStyle(fmt.Sprintf("%d", info.PID)))
+		fmt.Fprintf(a.Out, "   %s %-10s : %s\n", keyStyle("•"), "NAME", valueStyle(info.Name))
+		fmt.Fprintf(a.Out, "   %s %-10s : %s\n", keyStyle("•"), "PORT", valueStyle(fmt.Sprintf("%d", info.Port)))
+		fmt.Fprintln(a.Out)
 	}
 
-	if !forceKill {
-		fmt.Printf("%s %s %s",
+	if !a.ForceKill {
+		fmt.Fprintf(a.Out, "%s %s %s",
 			promptStyle("🔥"),
 			errorStyle("해당 프로세스들을 즉시 종료하시겠습니까?"),
 			warnStyle("(y/N): "))
-		if !readConfirm() {
-			fmt.Printf("\n%s %s\n", warnStyle("ℹ️"), valueStyle("프로세스 종료가 취소되었습니다."))
+		if !a.readConfirm() {
+			fmt.Fprintf(a.Out, "\n%s %s\n", warnStyle("ℹ️"), valueStyle("프로세스 종료가 취소되었습니다."))
 			return nil
 		}
 	}
 
 	for _, info := range infos {
-		if err := killWith(info.PID); err != nil {
-			fmt.Fprintf(os.Stderr, "\n%s PID %d %v\n", errorStyle("❌ 종료 실패:"), info.PID, err)
+		if err := a.killWith(info.PID); err != nil {
+			fmt.Fprintf(a.ErrW, "\n%s PID %d %v\n", errorStyle("❌ 종료 실패:"), info.PID, err)
 		} else {
-			fmt.Printf("\n%s PID %d %s\n", successStyle("✅"), info.PID, valueStyle("프로세스가 안전하게 종료되었습니다."))
+			fmt.Fprintf(a.Out, "\n%s PID %d %s\n", successStyle("✅"), info.PID, valueStyle("프로세스가 안전하게 종료되었습니다."))
 		}
 	}
 	return nil
 }
 
-func runPortRange(start, end uint16) error {
-	fmt.Printf("%s 포트 %s%d-%d%s 범위를 스캔 중입니다...\n",
+func (a *App) runPortRange(start, end uint16) error {
+	fmt.Fprintf(a.Out, "%s 포트 %s%d-%d%s 범위를 스캔 중입니다...\n",
 		headerStyle("🔍"), warnStyle("["), start, end, warnStyle("]"))
 
-	infos, err := port.FindByPortRange(start, end)
+	infos, err := a.Ops.FindByPortRange(start, end)
 	if err != nil {
 		return err
 	}
 	if len(infos) == 0 {
-		fmt.Printf("%s 포트 %d-%d 범위에서 사용 중인 포트를 찾을 수 없습니다.\n", warnStyle("⚠️"), start, end)
+		fmt.Fprintf(a.Out, "%s 포트 %d-%d 범위에서 사용 중인 포트를 찾을 수 없습니다.\n", warnStyle("⚠️"), start, end)
 		return nil
 	}
 
-	if jsonOut {
-		return printJSON(infos)
+	if a.JSON {
+		return a.printJSON(infos)
 	}
 
-	fmt.Println()
-	printTable(infos)
-	fmt.Println()
+	fmt.Fprintln(a.Out)
+	a.printTable(infos)
+	fmt.Fprintln(a.Out)
 
-	if forceKill {
-		fmt.Printf("%s 총 %d개 프로세스를 강제 종료합니다...\n", warnStyle("🔥"), len(infos))
+	if a.ForceKill {
+		fmt.Fprintf(a.Out, "%s 총 %d개 프로세스를 강제 종료합니다...\n", warnStyle("🔥"), len(infos))
 		for _, info := range infos {
-			if err := killWith(info.PID); err != nil {
-				fmt.Fprintf(os.Stderr, "%s PID %d 종료 실패: %v\n", errorStyle("❌"), info.PID, err)
+			if err := a.killWith(info.PID); err != nil {
+				fmt.Fprintf(a.ErrW, "%s PID %d 종료 실패: %v\n", errorStyle("❌"), info.PID, err)
 			} else {
-				fmt.Printf("%s PID %d (%s:%d) 종료 완료\n", successStyle("✅"), info.PID, info.Name, info.Port)
+				fmt.Fprintf(a.Out, "%s PID %d (%s:%d) 종료 완료\n", successStyle("✅"), info.PID, info.Name, info.Port)
 			}
 		}
 	} else {
-		fmt.Printf("%s\n", dimStyle("특정 포트를 종료하려면: poff -p <PORT> [-f]"))
+		fmt.Fprintf(a.Out, "%s\n", dimStyle("특정 포트를 종료하려면: poff -p <PORT> [-f]"))
 	}
 	return nil
 }
 
 // ─── 출력 헬퍼 ────────────────────────────────────────────────────────────────
 
-func printTable(infos []*port.ProcessInfo) {
-	fmt.Printf("  %-8s  %-10s  %s\n", headerStyle("PORT"), headerStyle("PID"), headerStyle("NAME"))
-	fmt.Println("  " + strings.Repeat("─", 36))
+func (a *App) printTable(infos []*port.ProcessInfo) {
+	fmt.Fprintf(a.Out, "  %-8s  %-10s  %s\n", headerStyle("PORT"), headerStyle("PID"), headerStyle("NAME"))
+	fmt.Fprintln(a.Out, "  "+strings.Repeat("─", 36))
 	for _, info := range infos {
-		fmt.Printf("  %-8d  %-10d  %s\n", info.Port, info.PID, info.Name)
+		fmt.Fprintf(a.Out, "  %-8d  %-10d  %s\n", info.Port, info.PID, info.Name)
 	}
 }
 
-func printJSON(infos []*port.ProcessInfo) error {
+func (a *App) printJSON(infos []*port.ProcessInfo) error {
 	type entry struct {
 		Port uint16 `json:"port"`
 		PID  int32  `json:"pid"`
@@ -203,22 +251,22 @@ func printJSON(infos []*port.ProcessInfo) error {
 	for i, info := range infos {
 		entries[i] = entry{Port: info.Port, PID: info.PID, Name: info.Name}
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(a.Out)
 	enc.SetIndent("", "  ")
 	return enc.Encode(entries)
 }
 
 // ─── 종료 헬퍼 ────────────────────────────────────────────────────────────────
 
-func killWith(pid int32) error {
-	if graceful {
-		return port.KillProcessGracefully(pid, 5*time.Second)
+func (a *App) killWith(pid int32) error {
+	if a.Graceful {
+		return a.Ops.KillProcessGracefully(pid, 5*time.Second)
 	}
-	return port.KillProcessByPID(pid)
+	return a.Ops.KillProcessByPID(pid)
 }
 
-func readConfirm() bool {
-	reader := bufio.NewReader(os.Stdin)
+func (a *App) readConfirm() bool {
+	reader := bufio.NewReader(a.In)
 	answer, _ := reader.ReadString('\n')
 	return strings.ToLower(strings.TrimSpace(answer)) == "y"
 }
@@ -226,7 +274,7 @@ func readConfirm() bool {
 // ─── Cobra 설정 ───────────────────────────────────────────────────────────────
 
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	if err := rootCmd.Execute(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -238,12 +286,22 @@ func init() {
 	}
 	rootCmd.Version = Version
 
-	rootCmd.Flags().StringVarP(&portStr, "port", "p", "", "검색할 포트 번호 또는 범위 (예: 8080, 3000-4000)")
-	rootCmd.Flags().BoolVarP(&forceKill, "force", "f", false, "확인 없이 즉시 프로세스 종료")
-	rootCmd.Flags().BoolVarP(&listMode, "list", "l", false, "현재 사용 중인 모든 포트 목록 출력")
-	rootCmd.Flags().BoolVarP(&jsonOut, "json", "j", false, "JSON 형식으로 출력")
-	rootCmd.Flags().BoolVarP(&graceful, "graceful", "g", false, "SIGTERM 후 5초 대기, 이후 SIGKILL (Graceful 종료)")
-	rootCmd.Flags().BoolP("version", "v", false, "버전 출력")
+	// Run은 rootCmd를 참조하므로 초기화 순환을 피하기 위해 여기서 할당합니다.
+	rootCmd.Run = func(ctx *wcli.Context) error {
+		// 인자 없이 실행된 경우 루트 도움말을 출력합니다.
+		return newApp().Run(func() error {
+			rootCmd.Help()
+			return nil
+		})
+	}
+
+	rootCmd.Flags().StringVar(&portStr, "port", "p", "", "검색할 포트 번호 또는 범위 (예: 8080, 3000-4000)")
+	rootCmd.Flags().BoolVar(&forceKill, "force", "f", false, "확인 없이 즉시 프로세스 종료")
+	rootCmd.Flags().BoolVar(&listMode, "list", "l", false, "현재 사용 중인 모든 포트 목록 출력")
+	rootCmd.Flags().BoolVar(&jsonOut, "json", "j", false, "JSON 형식으로 출력")
+	rootCmd.Flags().BoolVar(&graceful, "graceful", "g", false, "SIGTERM 후 5초 대기, 이후 SIGKILL (Graceful 종료)")
+
+	// wcli는 Version 필드가 설정되면 --version 플래그를 자동으로 등록합니다.
 }
 
 func resolveVersion() string {

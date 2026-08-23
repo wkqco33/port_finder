@@ -1,3 +1,8 @@
+//go:build integration
+
+// 이 파일은 실제 OS에 의존하는 통합 테스트입니다 (실제 소켓/프로세스 사용).
+// 기본 `go test ./...`에서는 제외되며 `go test -tags integration`으로 실행합니다.
+// 빠른 결정적 단위 테스트는 port_unit_test.go를 참고하세요.
 package port_test
 
 import (

@@ -1,9 +1,9 @@
-version: '3'
+version: "3"
 
 vars:
   BINARY_NAME: poff
   EXE_EXT: '{{if eq OS "windows"}}.exe{{else}}{{end}}'
-  BINARY: '{{.BINARY_NAME}}{{.EXE_EXT}}'
+  BINARY: "{{.BINARY_NAME}}{{.EXE_EXT}}"
   VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
   LDFLAGS: -s -w -X port_finder/cmd.Version={{.VERSION}}
@@ -29,9 +29,25 @@ tasks:
         platforms: [windows]
 
   test:
-    desc: Run unit tests
+    desc: Run hermetic unit tests (fast, OS-independent)
     cmds:
       - go test ./... -v
+
+  test:integration:
+    desc: Run integration tests against the real OS (sockets/processes)
+    cmds:
+      - go test -tags integration ./pkg/port/ -count=1 -v
+
+  test:all:
+    desc: Run unit + integration tests
+    cmds:
+      - go test ./... -count=1
+      - go test -tags integration ./pkg/port/ -count=1
+
+  test:coverage:
+    desc: Run unit tests with coverage report
+    cmds:
+      - go test ./... -cover
 
   install:
     desc: Install the binary to local bin directory
