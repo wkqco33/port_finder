@@ -1,6 +1,14 @@
 # poff (Port Finder)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/wkqco33/port_finder/actions/workflows/ci.yml/badge.svg)](https://github.com/wkqco33/port_finder/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/wkqco33/port_finder?include_prereleases)](https://github.com/wkqco33/port_finder/releases)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/wkqco33/port_finder)](https://go.dev/dl/)
+[![GitHub Repo stars](https://img.shields.io/github/stars/wkqco33/port_finder?style=social)](https://github.com/wkqco33/port_finder)
+
 특정 포트를 사용 중인 프로세스를 찾아내고 안전하게 종료할 수 있도록 도와주는 크로스플랫폼 CLI 유틸리티입니다.
+
+> ⚠️ **주의**: 종료 작업은 기본적으로 사용자 확인 후 진행되며, `-f` 옵션 사용 시 확인 없이 즉시 종료됩니다. 관리 권한이 필요한 프로세스는 권한에 따라 동작이 제한될 수 있습니다.
 
 ## 주요 기능
 
@@ -14,7 +22,7 @@
 
 ## 시스템 요구사항
 
-- Go 1.21 이상
+- Go 1.26.1 이상
 
 ## 설치
 
@@ -125,7 +133,23 @@ $ poff -p 8080 -j
 ## 디렉터리 구조
 
 - `main.go` : 진입점
-- `cmd/` : CLI 커맨드 정의 (cobra)
+- `cmd/` : CLI 커맨드 정의 (wcli)
 - `pkg/port/` : 포트 조회 및 프로세스 종료 로직
 - `Taskfile.yml` : 빌드/설치/제거 명령어 래퍼 (Task)
 - `ppm.json` : ppm 패키지 메타데이터
+
+## 기여 및 커뮤니티
+
+이 프로젝트에 기여하고 싶다면 다음 문서를 참고해 주세요.
+
+- [기여 가이드](CONTRIBUTING.md)
+- [보안 정책](SECURITY.md) — 취약점 보고
+- [행동 강령](CODE_OF_CONDUCT.md)
+- [변경 이력](CHANGELOG.md)
+- [라이선스](LICENSE)
+
+기능 요청이나 버그 리포트는 [Issues](https://github.com/wkqco33/port_finder/issues)에, 질문이나 토론은 [Discussions](https://github.com/wkqco33/port_finder/discussions)에 남겨 주세요.
+
+## 라이선스
+
+[MIT](LICENSE) 라이선스 하에 배포됩니다. © 2026 poff contributors

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 문의 / 질문
+    url: https://github.com/wkqco33/port_finder/discussions
+    about: 버그가 아닌 질문이나 토론은 Discussions를 이용해 주세요.
