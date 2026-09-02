@@ -17,6 +17,7 @@
 - **전체 목록 조회**: 현재 열려 있는 모든 포트와 프로세스를 테이블로 출력합니다.
 - **프로세스 종료**: 검색된 프로세스를 사용자 확인 후 안전하게 강제 종료(Kill)할 수 있습니다.
 - **Graceful 종료**: SIGTERM을 먼저 보내고 5초 후 응답 없으면 SIGKILL로 에스컬레이션합니다.
+- **AI 포트 분석**: `--ai` 옵션으로 현재 사용 중인 포트 전체를 LLM(Ollama)에게 분석시켜 서비스 용도 추정, 위험도, 정리 제안을 받습니다.
 - **JSON 출력**: 스크립트 자동화 파이프라인을 위한 JSON 형식 출력을 지원합니다.
 - **크로스플랫폼**: Linux, macOS, Windows 모두 지원합니다.
 
@@ -57,13 +58,22 @@ task clean
 poff [flags]
 
 Flags:
-  -p, --port string   검색할 포트 번호 또는 범위 (예: 8080, 3000-4000)
-  -f, --force         확인 없이 즉시 프로세스 종료
-  -l, --list          현재 사용 중인 모든 포트 목록 출력
-  -j, --json          JSON 형식으로 출력
-  -g, --graceful      SIGTERM 후 5초 대기, 이후 SIGKILL (Graceful 종료)
-  -v, --version       버전 출력
-  -h, --help          도움말 출력
+  -p, --port string    검색할 포트 번호 또는 범위 (예: 8080, 3000-4000)
+  -f, --force          확인 없이 즉시 프로세스 종료
+  -l, --list           현재 사용 중인 모든 포트 목록 출력
+  -j, --json           JSON 형식으로 출력
+  -g, --graceful       SIGTERM 후 5초 대기, 이후 SIGKILL (Graceful 종료)
+  -a, --ai             LLM(Ollama)으로 현재 사용 중 포트를 분석 (목록 분석 전용)
+      --ai-model       AI 분석에 사용할 Ollama 모델 (기본: 설정값 또는 qwen3:4b)
+      --ai-base-url    AI 분석에 사용할 LLM 엔드포인트 (기본: 설정값 또는 http://localhost:11434/v1)
+      --ai-timeout     AI 분석 요청 타임아웃 (기본: 설정값 또는 1m, 예: 90s)
+  -v, --version        버전 출력
+  -h, --help           도움말 출력
+
+Config Commands:
+  poff config show     현재 유효 설정 표시 (출처 포함)
+  poff config init     기본값 설정 파일 생성 (~/.poff.json)
+  poff config set KEY VALUE  설정 값 변경 (예: poff config set ai.model llama3.2)
 ```
 
 ### 실행 예시
@@ -117,6 +127,56 @@ poff -p 8080 -g
 poff -p 8080 -f
 ```
 
+#### **AI 포트 분석 (Ollama)**
+
+```bash
+# 로컬 Ollama(기본 모델: qwen3:4b)로 현재 포트 사용 현황 분석
+poff --ai
+
+# 모델 지정
+poff --ai --ai-model llama3.2
+```
+
+사전 준비:
+
+```bash
+ollama serve              # Ollama 서버 실행 (http://localhost:11434)
+ollama pull qwen3:4b      # 분석에 사용할 모델 설치
+```
+
+AI 모드는 **분석 전용**입니다 — 서비스 용도 추정, 위험도, 정리 제안을 출력하며
+프로세스를 종료하지 않습니다. 종료는 기존처럼 `poff -p <PORT> [-f]`로 수행하세요.
+
+#### **AI 설정 관리 (config)**
+
+```bash
+# 기본값 설정 파일(~/.poff.json) 생성
+poff config init
+
+# 현재 유효 설정 확인 (출처: 플래그/설정 파일/기본값)
+poff config show
+
+# 설정 변경
+poff config set ai.model llama3.2
+poff config set ai.base_url http://192.168.1.5:11434/v1
+poff config set ai.timeout 90s
+```
+
+설정 파일(`~/.poff.json`) 예시:
+
+```json
+{
+  "ai": {
+    "model": "qwen3:4b",
+    "base_url": "http://localhost:11434/v1",
+    "timeout": "1m0s"
+  }
+}
+```
+
+설정 우선순위는 **CLI 플래그 > 설정 파일 > 기본값**이며, 일회성 변경은
+`poff --ai --ai-model llama3.2`처럼 플래그로 덮어쓸 수 있습니다.
+
 #### **JSON 출력**
 
 ```bash
@@ -135,6 +195,8 @@ $ poff -p 8080 -j
 - `main.go` : 진입점
 - `cmd/` : CLI 커맨드 정의 (wcli)
 - `pkg/port/` : 포트 조회 및 프로세스 종료 로직
+- `pkg/ai/` : LLM(Ollama) 포트 분석 로직 (LLM_client_go)
+- `pkg/config/` : 설정 파일(~/.poff.json) 로드/초기화/변경
 - `Taskfile.yml` : 빌드/설치/제거 명령어 래퍼 (Task)
 - `ppm.json` : ppm 패키지 메타데이터
 

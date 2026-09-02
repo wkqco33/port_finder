@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"port_finder/pkg/ai"
+	cfgpkg "port_finder/pkg/config"
 	"port_finder/pkg/port"
 
 	"github.com/fatih/color"
@@ -21,11 +25,15 @@ import (
 var Version = "1.0.0"
 
 var (
-	portStr   string
-	forceKill bool
-	listMode  bool
-	jsonOut   bool
-	graceful  bool
+	portStr    string
+	forceKill  bool
+	listMode   bool
+	jsonOut    bool
+	graceful   bool
+	aiMode     bool
+	aiModel    string
+	aiBaseURL  string
+	cfgTimeout time.Duration
 )
 
 var (
@@ -49,6 +57,12 @@ type portOps interface {
 	KillProcessGracefully(pid int32, timeout time.Duration) error
 }
 
+// aiOps는 CLI가 사용하는 ai 패키지의 표면입니다.
+// 테스트에서 페이크로 대체할 수 있습니다.
+type aiOps interface {
+	Analyze(ctx context.Context, services []ai.Service) (string, error)
+}
+
 // App은 CLI가 갖는 모든 외부 의존성(입출력 스트림 + 포트 연산)을 한곳에 모은 구조체입니다.
 // 스트림과 ops를 주입할 수 있어 단위 테스트에서 bytes.Buffer/페이크로 검증할 수 있습니다.
 type App struct {
@@ -57,33 +71,84 @@ type App struct {
 	In   io.Reader
 
 	Ops portOps
+	AI  aiOps
 
 	PortStr   string
 	ForceKill bool
 	ListMode  bool
 	JSON      bool
 	Graceful  bool
+	AIMode    bool
+	AIModel   string
 }
 
 // newApp은 cobra 플래그와 실제 프로세스 스트림으로 App을 구성합니다.
+// AI 설정은 우선순위(CLI 플래그 > 설정 파일 > 기본값)에 따라 구성됩니다.
 func newApp() *App {
+	aiCfg := resolveAIConfig()
+
 	return &App{
 		Out:  os.Stdout,
 		ErrW: os.Stderr,
 		In:   os.Stdin,
 		Ops:  port.NewFinder(),
+		AI: ai.NewAnalyzer(
+			ai.WithModel(aiCfg.Model),
+			ai.WithBaseURL(aiCfg.BaseURL),
+			ai.WithTimeout(time.Duration(aiCfg.Timeout)),
+		),
 
 		PortStr:   portStr,
 		ForceKill: forceKill,
 		ListMode:  listMode,
 		JSON:      jsonOut,
 		Graceful:  graceful,
+		AIMode:    aiMode,
+		AIModel:   aiCfg.Model,
 	}
 }
 
-// Run은 플래그 상태에 따라 목록/단일/범위 실행을 디스패치합니다.
+// resolveAIConfig는 설정 파일을 로드해 CLI 플래그 오버라이드를 적용한
+// 최종 AI 설정을 반환합니다. 설정 파일이 없거나 손상되면 기본값으로 폴백합니다.
+func resolveAIConfig() cfgpkg.AIConfig {
+	var flags cfgpkg.AIConfig
+	if aiModel != "" {
+		flags.Model = aiModel
+	}
+	if aiBaseURL != "" {
+		flags.BaseURL = aiBaseURL
+	}
+	if cfgTimeout > 0 {
+		flags.Timeout = cfgpkg.Duration(cfgTimeout)
+	}
+
+	path, err := cfgpkg.ResolvePath(os.UserHomeDir)
+	if err != nil {
+		return cfgpkg.Apply(cfgpkg.AIConfig{}, flags)
+	}
+	fileCfg, err := cfgpkg.Load(path)
+	if err != nil {
+		// 손상된 설정은 조용히 기본값으로 폴백합니다 (CLI가 막히지 않도록).
+		return cfgpkg.Apply(cfgpkg.AIConfig{}, flags)
+	}
+	return cfgpkg.Apply(fileCfg.AI, flags)
+}
+
+// Run은 플래그 상태에 따라 목록/단일/범위/AI 실행을 디스패치합니다.
 // help는 인자가 없을 때 호출할 헬프 함수입니다 (테스트에서는 무시 가능한 함수 전달).
+// AI 분석은 --ai 플래그(AIMode)가 켜진 경우에만 실행됩니다.
 func (a *App) Run(help func() error) error {
+	if a.AIMode {
+		// AI 모드는 목록 기반 분석 전용이므로 -p와 동시 사용을 막습니다.
+		if a.PortStr != "" {
+			return errors.New("--ai는 포트 목록 분석 전용입니다. -p/--port와 함께 사용할 수 없습니다 (단독으로 실행하세요)")
+		}
+		// --json은 구조화된 데이터 출력용이므로 자유 텍스트인 AI 분석과 동시 사용을 막습니다.
+		if a.JSON {
+			return errors.New("--ai는 자유 텍스트 분석을 출력하므로 --json과 함께 사용할 수 없습니다")
+		}
+		return a.runAI()
+	}
 	if a.ListMode {
 		return a.runList()
 	}
@@ -105,7 +170,10 @@ var rootCmd = &wcli.Command{
 	Version: Version,
 	Short:   "포트를 사용하는 프로세스를 찾아 종료하는 유틸리티",
 	Long: `지정한 포트 번호를 사용하는 프로세스의 정보를 보여주고,
-사용자 확인 후 해당 프로세스를 즉시 종료할 수 있습니다.`,
+사용자 확인 후 해당 프로세스를 즉시 종료할 수 있습니다.
+
+--ai 옵션으로 현재 사용 중인 포트 전체를 LLM(Ollama)에게 분석시켜
+서비스 용도 추정, 위험도, 정리 제안을 받을 수 있습니다.`,
 	// SilenceErrors: wcli의 기본 에러 출력을 끄고 Execute()에서 직접 처리합니다.
 	SilenceErrors: true,
 }
@@ -231,6 +299,47 @@ func (a *App) runPortRange(start, end uint16) error {
 	return nil
 }
 
+// runAI는 포트 목록을 조회해 테이블로 출력한 뒤 LLM으로 분석합니다.
+// AI 모드는 분석 전용으로, 프로세스 종료 흐름으로 진입하지 않습니다.
+func (a *App) runAI() error {
+	model := a.AIModel
+	if model == "" {
+		model = ai.DefaultModel
+	}
+
+	infos, err := a.Ops.ListAll()
+	if err != nil {
+		return err
+	}
+	if len(infos) == 0 {
+		fmt.Fprintln(a.Out, warnStyle("ℹ️  사용 중인 포트가 없습니다. 분석할 대상이 없습니다."))
+		return nil
+	}
+
+	fmt.Fprintf(a.Out, "%s %s\n\n", headerStyle("📋"), headerStyle("현재 사용 중인 포트 목록"))
+	a.printTable(infos)
+	fmt.Fprintln(a.Out)
+
+	fmt.Fprintf(a.Out, "%s %s 분석 중입니다...\n", headerStyle("🤖"), dimStyle("Ollama("+model+")"))
+
+	// cmd는 pkg/port 데이터만 알므로 pkg/ai 타입으로 변환합니다.
+	services := make([]ai.Service, len(infos))
+	for i, info := range infos {
+		services[i] = ai.Service{Port: info.Port, PID: info.PID, Name: info.Name}
+	}
+
+	result, err := a.AI.Analyze(context.Background(), services)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(a.Out, "%s %s\n\n", successStyle("✨ AI 분석 결과"), dimStyle("("+model+")"))
+	fmt.Fprintln(a.Out, result)
+	fmt.Fprintln(a.Out)
+	fmt.Fprintf(a.Out, "%s %s\n", dimStyle("AI 분석은 참고용이며,"), dimStyle("종료는 poff -p <PORT> [-f] 로 수행하세요."))
+	return nil
+}
+
 // ─── 출력 헬퍼 ────────────────────────────────────────────────────────────────
 
 func (a *App) printTable(infos []*port.ProcessInfo) {
@@ -300,6 +409,13 @@ func init() {
 	rootCmd.Flags().BoolVar(&listMode, "list", "l", false, "현재 사용 중인 모든 포트 목록 출력")
 	rootCmd.Flags().BoolVar(&jsonOut, "json", "j", false, "JSON 형식으로 출력")
 	rootCmd.Flags().BoolVar(&graceful, "graceful", "g", false, "SIGTERM 후 5초 대기, 이후 SIGKILL (Graceful 종료)")
+	rootCmd.Flags().BoolVar(&aiMode, "ai", "a", false, "LLM(Ollama)으로 현재 사용 중 포트를 분석 (목록 분석 전용)")
+	rootCmd.Flags().StringVar(&aiModel, "ai-model", "", "", "AI 분석에 사용할 Ollama 모델 (기본: 설정값 또는 qwen3:4b)")
+	rootCmd.Flags().StringVar(&aiBaseURL, "ai-base-url", "", "", "AI 분석에 사용할 LLM 엔드포인트 (기본: 설정값 또는 http://localhost:11434/v1)")
+	rootCmd.Flags().DurationVar(&cfgTimeout, "ai-timeout", "", 0, "AI 분석 요청 타임아웃 (기본: 설정값 또는 1m, 예: 90s)")
+
+	// config 서브커맨드 (show/init/set)를 등록합니다.
+	rootCmd.AddCommand(newConfigCommand())
 
 	// wcli는 Version 필드가 설정되면 --version 플래그를 자동으로 등록합니다.
 }

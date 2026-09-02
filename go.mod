@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/fatih/color v1.18.0
 	github.com/shirou/gopsutil/v4 v4.26.1
+	github.com/wkqco33/LLM_client_go v0.1.0
 	github.com/wkqco33/wcli v0.2.0
 )
 

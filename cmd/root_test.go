@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"port_finder/pkg/ai"
 	portpkg "port_finder/pkg/port"
 )
 
@@ -247,4 +250,183 @@ func rangeResults(uint16, uint16) ([]*portpkg.ProcessInfo, error) {
 
 func newAppOp(ops *fakeOps, in string, out *bytes.Buffer) *App {
 	return newAppForTest(ops, in, out)
+}
+
+// ─── AI 모드 ──────────────────────────────────────────────────────────────────
+
+type fakeAI struct {
+	analyzeFunc func(services []ai.Service) (string, error)
+
+	lastServices []ai.Service
+	callCount    int
+}
+
+func (f *fakeAI) Analyze(ctx context.Context, services []ai.Service) (string, error) {
+	f.callCount++
+	f.lastServices = services
+	if f.analyzeFunc != nil {
+		return f.analyzeFunc(services)
+	}
+	return "AI 분석 결과입니다.", nil
+}
+
+func TestRunAI_ListAnalysis(t *testing.T) {
+	ops := &fakeOps{listFunc: func() ([]*portpkg.ProcessInfo, error) {
+		return []*portpkg.ProcessInfo{{PID: 1, Name: "node", Port: 3000}}, nil
+	}}
+	aiOps := &fakeAI{}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.AIMode = true
+	app.AI = aiOps
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+
+	s := out.String()
+	if !strings.Contains(s, "node") {
+		t.Errorf("포트 테이블이 출력되어야 합니다: %q", s)
+	}
+	if !strings.Contains(s, "AI 분석 결과입니다.") {
+		t.Errorf("AI 분석 결과가 출력되어야 합니다: %q", s)
+	}
+	if aiOps.callCount != 1 {
+		t.Errorf("Analyze 호출 횟수 = %d, want 1", aiOps.callCount)
+	}
+	if len(aiOps.lastServices) != 1 || aiOps.lastServices[0].Name != "node" {
+		t.Errorf("변환된 서비스가 올바르지 않습니다: %+v", aiOps.lastServices)
+	}
+}
+
+func TestRunAI_NoKillPrompt(t *testing.T) {
+	ops := &fakeOps{listFunc: func() ([]*portpkg.ProcessInfo, error) {
+		return []*portpkg.ProcessInfo{{PID: 1, Name: "node", Port: 3000}}, nil
+	}}
+	aiOps := &fakeAI{}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.AIMode = true
+	app.AI = aiOps
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+	if strings.Contains(out.String(), "종료하시겠습니까") {
+		t.Error("AI 모드에서는 종료 확인 프롬프트가 출력되지 않아야 합니다")
+	}
+	if len(ops.killed) != 0 {
+		t.Errorf("AI 모드에서는 프로세스를 종료하지 않아야 합니다: %v", ops.killed)
+	}
+}
+
+func TestRunAI_LLMError(t *testing.T) {
+	ops := &fakeOps{listFunc: func() ([]*portpkg.ProcessInfo, error) {
+		return []*portpkg.ProcessInfo{{PID: 1, Name: "node", Port: 3000}}, nil
+	}}
+	aiOps := &fakeAI{analyzeFunc: func([]ai.Service) (string, error) {
+		return "", errors.New("연결 거부됨")
+	}}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.AIMode = true
+	app.AI = aiOps
+
+	if err := app.Run(nil); err == nil {
+		t.Fatal("LLM 실패 시 에러가 반환되어야 합니다")
+	}
+}
+
+func TestRunAI_PortAndAIMutuallyExclusive(t *testing.T) {
+	ops := &fakeOps{}
+	aiOps := &fakeAI{}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.AIMode = true
+	app.PortStr = "8080"
+	app.AI = aiOps
+
+	err := app.Run(nil)
+	if err == nil {
+		t.Fatal("--port와 --ai 동시 사용 시 에러가 반환되어야 합니다")
+	}
+	if aiOps.callCount != 0 {
+		t.Errorf("에러 시 Analyze가 호출되지 않아야 합니다: %d", aiOps.callCount)
+	}
+}
+
+func TestRunAI_AIOnlyMode(t *testing.T) {
+	// --ai 단독 사용 시에도 목록 기반 분석이 수행되어야 합니다.
+	ops := &fakeOps{listFunc: func() ([]*portpkg.ProcessInfo, error) {
+		return []*portpkg.ProcessInfo{{PID: 1, Name: "node", Port: 3000}}, nil
+	}}
+	aiOps := &fakeAI{}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.AIMode = true
+	app.AI = aiOps
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+	if aiOps.callCount != 1 {
+		t.Errorf("--ai 단독 실행 시 Analyze가 호출되어야 합니다: %d", aiOps.callCount)
+	}
+}
+
+func TestRunAI_EmptyList(t *testing.T) {
+	ops := &fakeOps{listFunc: func() ([]*portpkg.ProcessInfo, error) { return nil, nil }}
+	aiOps := &fakeAI{}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.AIMode = true
+	app.AI = aiOps
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+	if aiOps.callCount != 0 {
+		t.Errorf("빈 목록에서는 Analyze가 호출되지 않아야 합니다: %d", aiOps.callCount)
+	}
+}
+
+// ─── AI 비활성 모드 ───────────────────────────────────────────────────────────
+
+func TestRunWithoutAIFlag_ListModeSkipsAI(t *testing.T) {
+	// -l만 사용 시 --ai 플래그가 없으면 AI 분석이 실행되지 않아야 합니다.
+	ops := &fakeOps{listFunc: func() ([]*portpkg.ProcessInfo, error) {
+		return []*portpkg.ProcessInfo{{PID: 1, Name: "node", Port: 3000}}, nil
+	}}
+	aiOps := &fakeAI{}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.ListMode = true
+	app.AI = aiOps // newApp()이 AI를 항상 구성하므로 AIMode 플래그로만 제어됩니다.
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+	if aiOps.callCount != 0 {
+		t.Errorf("--ai 플래그 없이는 Analyze가 호출되지 않아야 합니다: %d", aiOps.callCount)
+	}
+	if !strings.Contains(out.String(), "node") {
+		t.Error("일반 목록 모드가 실행되어야 합니다")
+	}
+}
+
+func TestRunWithoutAIFlag_SinglePortSkipsAI(t *testing.T) {
+	// -p 8080은 --ai 플래그 없이 AI와 무관하게 동작해야 합니다.
+	ops := &fakeOps{findFunc: singleResult}
+	aiOps := &fakeAI{}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "y", &out)
+	app.PortStr = "8080"
+	app.AI = aiOps
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+	if aiOps.callCount != 0 {
+		t.Errorf("--ai 플래그 없이는 Analyze가 호출되지 않아야 합니다: %d", aiOps.callCount)
+	}
 }
