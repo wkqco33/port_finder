@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -46,10 +47,21 @@ func (f *fakeOps) KillProcessGracefully(pid int32, t time.Duration) error {
 
 func newAppForTest(ops portOps, in string, out *bytes.Buffer) *App {
 	return &App{
-		Out:  out,
-		ErrW: out,
-		In:   strings.NewReader(in),
-		Ops:  ops,
+		Out:   out,
+		ErrW:  out,
+		In:    strings.NewReader(in),
+		Ops:   ops,
+		IsTTY: func() bool { return true },
+	}
+}
+
+func newAppWithStreams(ops portOps, in string, out, errW *bytes.Buffer) *App {
+	return &App{
+		Out:   out,
+		ErrW:  errW,
+		In:    strings.NewReader(in),
+		Ops:   ops,
+		IsTTY: func() bool { return true },
 	}
 }
 
@@ -155,8 +167,112 @@ func TestRunSingle_ForceKill_NoPrompt(t *testing.T) {
 	}
 }
 
+func TestRunSingle_YesFlag_NoPrompt(t *testing.T) {
+	ops := &fakeOps{findFunc: singleResult}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.PortStr = "8080"
+	app.ForceKill = true // --yes 플래그는 ForceKill을 true로 설정합니다
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+	if len(ops.killed) != 1 {
+		t.Errorf("--yes 플래그 시 KillProcessByPID가 호출되어야 합니다: %v", ops.killed)
+	}
+}
+
+func TestRunSinglePort_NonTTY_RequiresForce(t *testing.T) {
+	ops := &fakeOps{findFunc: singleResult}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.PortStr = "8080"
+	app.IsTTY = func() bool { return false } // 비TTY 환경 시뮬레이션
+
+	err := app.Run(nil)
+	if err == nil {
+		t.Fatal("비TTY 환경에서 --force 없이 실행 시 에러가 반환되어야 합니다")
+	}
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitCodePromptRequired {
+		t.Errorf("기대 ExitCodePromptRequired(%d), 실제: %v", ExitCodePromptRequired, err)
+	}
+	if len(ops.killed) != 0 {
+		t.Errorf("비TTY 에러 시 프로세스가 종료되면 안 됩니다: %v", ops.killed)
+	}
+}
+
+func TestRunSinglePort_NoInput_RequiresForce(t *testing.T) {
+	ops := &fakeOps{findFunc: singleResult}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.PortStr = "8080"
+	app.NoInput = true
+
+	err := app.Run(nil)
+	if err == nil {
+		t.Fatal("--no-input 환경에서 --force 없이 실행 시 에러가 반환되어야 합니다")
+	}
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitCodePromptRequired {
+		t.Errorf("기대 ExitCodePromptRequired(%d), 실제: %v", ExitCodePromptRequired, err)
+	}
+	if len(ops.killed) != 0 {
+		t.Errorf("--no-input 에러 시 프로세스가 종료되면 안 됩니다: %v", ops.killed)
+	}
+}
+
+func TestRunSinglePort_DryRun_DoesNotKill(t *testing.T) {
+	ops := &fakeOps{findFunc: singleResult}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.PortStr = "8080"
+	app.DryRun = true
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+	if len(ops.killed) != 0 {
+		t.Errorf("dry-run에서는 프로세스가 종료되면 안 됩니다: %v", ops.killed)
+	}
+	if !strings.Contains(out.String(), "dry-run") {
+		t.Errorf("dry-run 안내 문구가 출력되어야 합니다: %q", out.String())
+	}
+}
+
 func TestRunJSON_OutputsValidJSON(t *testing.T) {
 	ops := &fakeOps{findFunc: singleResult}
+	var out, errW bytes.Buffer
+	app := newAppWithStreams(ops, "", &out, &errW)
+	app.PortStr = "8080"
+	app.JSON = true
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+	jsonStr := out.String()
+	if !strings.Contains(jsonStr, `"port": 8080`) || !strings.Contains(jsonStr, `"pid": 1234`) {
+		t.Errorf("JSON 출력에 필드 누락: %q", jsonStr)
+	}
+	var parsed []map[string]any
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("stdout 출력이 유효한 JSON이 아닙니다: %v\n출력 내용:\n%s", err, jsonStr)
+	}
+	if len(parsed) != 1 {
+		t.Errorf("파싱된 항목 수 = %d, want 1", len(parsed))
+	}
+	// stdout에 검색 진행 메시지(🔍)가 섞이지 않았는지 확인
+	if strings.Contains(jsonStr, "🔍") {
+		t.Errorf("stdout에 진행 메시지가 섞여 있습니다: %q", jsonStr)
+	}
+	// 진행 메시지가 stderr에도 출력되지 않는지(--json 시 억제) 확인
+	if strings.Contains(errW.String(), "🔍") {
+		t.Errorf("--json 모드에서는 진행 메시지가 억제되어야 합니다: %q", errW.String())
+	}
+}
+
+func TestRunJSON_NotFound_OutputsEmptyJSONArray(t *testing.T) {
+	ops := &fakeOps{findFunc: func(uint16) ([]*portpkg.ProcessInfo, error) { return nil, nil }}
 	var out bytes.Buffer
 	app := newAppForTest(ops, "", &out)
 	app.PortStr = "8080"
@@ -165,9 +281,27 @@ func TestRunJSON_OutputsValidJSON(t *testing.T) {
 	if err := app.Run(nil); err != nil {
 		t.Fatalf("Run 오류: %v", err)
 	}
-	json := out.String()
-	if !strings.Contains(json, `"port": 8080`) || !strings.Contains(json, `"pid": 1234`) {
-		t.Errorf("JSON 출력에 필드 누락: %q", json)
+	var parsed []map[string]any
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("결과 없을 때의 출력이 유효한 JSON 배열이 아닙니다: %v\n출력: %q", err, out.String())
+	}
+	if len(parsed) != 0 {
+		t.Errorf("빈 배열을 기대했으나 길이가 %d입니다", len(parsed))
+	}
+}
+
+func TestRunQuiet_SuppressesProgress(t *testing.T) {
+	ops := &fakeOps{findFunc: singleResult}
+	var out, errW bytes.Buffer
+	app := newAppWithStreams(ops, "n\n", &out, &errW)
+	app.PortStr = "8080"
+	app.Quiet = true
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+	if strings.Contains(errW.String(), "🔍") {
+		t.Errorf("-q/--quiet 시 진행 메시지가 출력되지 않아야 합니다: %q", errW.String())
 	}
 }
 
@@ -199,6 +333,41 @@ func TestRunPortRange_ForceKill_All(t *testing.T) {
 	}
 	if len(ops.killed) != 2 {
 		t.Errorf("두 프로세스 모두 종료되어야 합니다: %v", ops.killed)
+	}
+}
+
+func TestRunPortRange_DryRun_DoesNotKill(t *testing.T) {
+	ops := &fakeOps{rangeFunc: rangeResults}
+	var out bytes.Buffer
+	app := newAppOp(ops, "", &out)
+	app.PortStr = "3000-4000"
+	app.ForceKill = true
+	app.DryRun = true
+
+	if err := app.Run(nil); err != nil {
+		t.Fatalf("Run 오류: %v", err)
+	}
+	if len(ops.killed) != 0 {
+		t.Errorf("dry-run에서는 범위 강제종료여도 프로세스가 종료되면 안 됩니다: %v", ops.killed)
+	}
+	if !strings.Contains(out.String(), "dry-run") {
+		t.Errorf("dry-run 안내 문구가 출력되어야 합니다: %q", out.String())
+	}
+}
+
+func TestParsePortArg_ReturnsUsageExitCode(t *testing.T) {
+	ops := &fakeOps{}
+	var out bytes.Buffer
+	app := newAppForTest(ops, "", &out)
+	app.PortStr = "invalid-port"
+
+	err := app.Run(nil)
+	if err == nil {
+		t.Fatal("유효하지 않은 포트 입력 시 에러가 반환되어야 합니다")
+	}
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitCodeUsage {
+		t.Errorf("기대 ExitCodeUsage(%d), 실제: %v", ExitCodeUsage, err)
 	}
 }
 

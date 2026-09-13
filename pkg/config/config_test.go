@@ -83,9 +83,85 @@ func TestDefaultPath_JoinsHome(t *testing.T) {
 	}
 }
 
+func TestXDGPath_Default(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("APPDATA", "")
+	got := XDGPath("/home/tester")
+	want := filepath.Join("/home/tester", ".config", "poff", "config.json")
+	if got != want {
+		t.Errorf("XDGPath() = %q, want %q", got, want)
+	}
+}
+
+func TestXDGPath_WithXDGConfigHome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/custom/config")
+	got := XDGPath("/home/tester")
+	want := filepath.Join("/custom/config", "poff", "config.json")
+	if got != want {
+		t.Errorf("XDGPath() = %q, want %q", got, want)
+	}
+}
+
+func TestResolvePath_POFF_CONFIG_Env(t *testing.T) {
+	custom := filepath.Join(t.TempDir(), "my-custom-config.json")
+	t.Setenv("POFF_CONFIG", custom)
+
+	got, err := ResolvePath(func() (string, error) { return "/home/tester", nil })
+	if err != nil {
+		t.Fatalf("ResolvePath() error = %v", err)
+	}
+	if got != custom {
+		t.Errorf("POFF_CONFIG가 우선해야 합니다: got %q, want %q", got, custom)
+	}
+}
+
+func TestResolvePath_LegacyFileExists(t *testing.T) {
+	t.Setenv("POFF_CONFIG", "")
+	home := t.TempDir()
+	legacy := filepath.Join(home, ".poff.json")
+	if err := os.WriteFile(legacy, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolvePath(func() (string, error) { return home, nil })
+	if err != nil {
+		t.Fatalf("ResolvePath() error = %v", err)
+	}
+	if got != legacy {
+		t.Errorf("기존 .poff.json이 있으면 레거시 경로를 사용해야 합니다: got %q, want %q", got, legacy)
+	}
+}
+
+func TestResolvePath_XDGDefaultWhenNoLegacy(t *testing.T) {
+	t.Setenv("POFF_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("APPDATA", "")
+	home := t.TempDir()
+
+	got, err := ResolvePath(func() (string, error) { return home, nil })
+	if err != nil {
+		t.Fatalf("ResolvePath() error = %v", err)
+	}
+	want := filepath.Join(home, ".config", "poff", "config.json")
+	if got != want {
+		t.Errorf("레거시 파일이 없으면 XDG 경로를 사용해야 합니다: got %q, want %q", got, want)
+	}
+}
+
 func TestResolvePath_HomeErrorReturnsError(t *testing.T) {
+	t.Setenv("POFF_CONFIG", "")
 	if _, err := ResolvePath(func() (string, error) { return "", os.ErrNotExist }); err == nil {
 		t.Fatal("홈 디렉터리 조회 실패 시 에러가 반환되어야 합니다")
+	}
+}
+
+func TestInit_CreatesParentDirectories(t *testing.T) {
+	nested := filepath.Join(t.TempDir(), "nested", "sub", "config.json")
+	if err := Init(nested); err != nil {
+		t.Fatalf("Init() 중첩 경로 생성 실패: %v", err)
+	}
+	if _, err := os.Stat(nested); err != nil {
+		t.Errorf("파일이 생성되지 않았습니다: %v", err)
 	}
 }
 

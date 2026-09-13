@@ -80,4 +80,4 @@ jobs:
           cache: true
 
       - name: Integration tests
-        run: go test -tags integration ./pkg/port/ -count=1 -v
+        run: go test -tags integration ./... -count=1 -v

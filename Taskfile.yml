@@ -36,13 +36,13 @@ tasks:
   test:integration:
     desc: Run integration tests against the real OS (sockets/processes)
     cmds:
-      - go test -tags integration ./pkg/port/ -count=1 -v
+      - go test -tags integration ./... -count=1 -v
 
   test:all:
     desc: Run unit + integration tests
     cmds:
       - go test ./... -count=1
-      - go test -tags integration ./pkg/port/ -count=1
+      - go test -tags integration ./... -count=1
 
   test:coverage:
     desc: Run unit tests with coverage report

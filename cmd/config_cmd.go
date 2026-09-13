@@ -41,7 +41,12 @@ func newConfigCommand() *wcli.Command {
 	cfgCmd := &wcli.Command{
 		Use:   "config",
 		Short: "poff 설정 관리 (show/init/set)",
-		Long: `poff의 AI 분석 설정(~/.poff.json)을 관리합니다.
+		Long: `poff의 AI 분석 설정을 관리합니다.
+
+설정 파일 우선순위:
+  1. POFF_CONFIG 환경변수
+  2. 기존 레거시 파일 (~/.poff.json)
+  3. XDG 표준 경로 ($XDG_CONFIG_HOME/poff/config.json 또는 ~/.config/poff/config.json)
 
 사용 예:
   poff config show                     현재 유효 설정과 출처를 표시
@@ -49,7 +54,7 @@ func newConfigCommand() *wcli.Command {
   poff config set ai.model qwen3:4b    모델 변경
   poff config set ai.timeout 90s       타임아웃 변경
 
-설정 우선순위: CLI 플래그 > 설정 파일 > 기본값`,
+설정 적용 우선순위: CLI 플래그 > 설정 파일 > 기본값`,
 		// Run이 없으면 wcli가 서브커맨드 목록과 함께 도움말을 출력합니다.
 	}
 
@@ -63,7 +68,7 @@ func newConfigCommand() *wcli.Command {
 		},
 		&wcli.Command{
 			Use:   "init",
-			Short: "기본값 설정 파일 생성 (~/.poff.json)",
+			Short: "기본값 설정 파일 생성 (XDG 표준 경로)",
 			Run: func(ctx *wcli.Context) error {
 				return newRealCfgApp().runInit()
 			},

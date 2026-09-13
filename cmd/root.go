@@ -24,9 +24,40 @@ import (
 
 var Version = "1.0.0"
 
+// 표준 종료 코드 (clig.dev 규약)
+const (
+	ExitCodeSuccess        = 0
+	ExitCodeError          = 1
+	ExitCodeUsage          = 2
+	ExitCodePromptRequired = 3
+)
+
+// ExitError는 종료 코드를 포함하는 CLI 에러입니다.
+type ExitError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *ExitError) Unwrap() error {
+	return e.Err
+}
+
+func usageError(format string, a ...any) error {
+	return &ExitError{Code: ExitCodeUsage, Err: fmt.Errorf(format, a...)}
+}
+
+func promptRequiredError(msg string) error {
+	return &ExitError{Code: ExitCodePromptRequired, Err: errors.New(msg)}
+}
+
 var (
 	portStr    string
 	forceKill  bool
+	yesFlag    bool
 	listMode   bool
 	jsonOut    bool
 	graceful   bool
@@ -34,6 +65,10 @@ var (
 	aiModel    string
 	aiBaseURL  string
 	cfgTimeout time.Duration
+	dryRun     bool
+	quiet      bool
+	noInput    bool
+	noColor    bool
 )
 
 var (
@@ -80,6 +115,20 @@ type App struct {
 	Graceful  bool
 	AIMode    bool
 	AIModel   string
+
+	DryRun  bool
+	Quiet   bool
+	NoInput bool
+	IsTTY   func() bool
+}
+
+// isStdinTTY는 os.Stdin이 터미널(TTY)인지 검사합니다.
+func isStdinTTY() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
 }
 
 // newApp은 cobra 플래그와 실제 프로세스 스트림으로 App을 구성합니다.
@@ -99,12 +148,16 @@ func newApp() *App {
 		),
 
 		PortStr:   portStr,
-		ForceKill: forceKill,
+		ForceKill: forceKill || yesFlag,
 		ListMode:  listMode,
 		JSON:      jsonOut,
 		Graceful:  graceful,
 		AIMode:    aiMode,
 		AIModel:   aiCfg.Model,
+		DryRun:    dryRun,
+		Quiet:     quiet,
+		NoInput:   noInput,
+		IsTTY:     isStdinTTY,
 	}
 }
 
@@ -141,11 +194,11 @@ func (a *App) Run(help func() error) error {
 	if a.AIMode {
 		// AI 모드는 목록 기반 분석 전용이므로 -p와 동시 사용을 막습니다.
 		if a.PortStr != "" {
-			return errors.New("--ai는 포트 목록 분석 전용입니다. -p/--port와 함께 사용할 수 없습니다 (단독으로 실행하세요)")
+			return usageError("--ai는 포트 목록 분석 전용입니다. -p/--port와 함께 사용할 수 없습니다 (단독으로 실행하세요)")
 		}
 		// --json은 구조화된 데이터 출력용이므로 자유 텍스트인 AI 분석과 동시 사용을 막습니다.
 		if a.JSON {
-			return errors.New("--ai는 자유 텍스트 분석을 출력하므로 --json과 함께 사용할 수 없습니다")
+			return usageError("--ai는 자유 텍스트 분석을 출력하므로 --json과 함께 사용할 수 없습니다")
 		}
 		return a.runAI()
 	}
@@ -157,7 +210,7 @@ func (a *App) Run(help func() error) error {
 	}
 	start, end, err := ParsePortArg(a.PortStr)
 	if err != nil {
-		return err
+		return usageError("%w", err)
 	}
 	if start == end {
 		return a.runSinglePort(start)
@@ -199,12 +252,22 @@ func ParsePortArg(s string) (start, end uint16, err error) {
 
 // ─── 실행 흐름 ────────────────────────────────────────────────────────────────
 
+func (a *App) logProgress(format string, args ...any) {
+	if a.JSON || a.Quiet {
+		return
+	}
+	fmt.Fprintf(a.ErrW, format, args...)
+}
+
 func (a *App) runList() error {
 	infos, err := a.Ops.ListAll()
 	if err != nil {
 		return err
 	}
 	if len(infos) == 0 {
+		if a.JSON {
+			return a.printJSON(infos)
+		}
 		fmt.Fprintln(a.Out, warnStyle("ℹ️  사용 중인 포트가 없습니다."))
 		return nil
 	}
@@ -217,7 +280,7 @@ func (a *App) runList() error {
 }
 
 func (a *App) runSinglePort(p uint16) error {
-	fmt.Fprintf(a.Out, "%s %s %d %s\n",
+	a.logProgress("%s %s %d %s\n",
 		headerStyle("🔍"), warnStyle("포트"), p, warnStyle("사용 중인 프로세스를 검색 중입니다..."))
 
 	infos, err := a.Ops.FindByPort(p)
@@ -225,6 +288,9 @@ func (a *App) runSinglePort(p uint16) error {
 		return err
 	}
 	if len(infos) == 0 {
+		if a.JSON {
+			return a.printJSON(infos)
+		}
 		fmt.Fprintf(a.Out, "%s 포트 %d를 사용하는 프로세스를 찾을 수 없습니다.\n", warnStyle("⚠️"), p)
 		return nil
 	}
@@ -243,6 +309,19 @@ func (a *App) runSinglePort(p uint16) error {
 	}
 
 	if !a.ForceKill {
+		if a.DryRun {
+			fmt.Fprintf(a.Out, "%s %s\n", dimStyle("ℹ️"), valueStyle("(dry-run) 프로세스를 종료하지 않습니다."))
+			return nil
+		}
+
+		isTTY := true
+		if a.IsTTY != nil {
+			isTTY = a.IsTTY()
+		}
+		if !isTTY || a.NoInput {
+			return promptRequiredError("비대화형 환경에서는 --force(-f) 또는 --yes(-y) 플래그를 지정해야 합니다")
+		}
+
 		fmt.Fprintf(a.Out, "%s %s %s",
 			promptStyle("🔥"),
 			errorStyle("해당 프로세스들을 즉시 종료하시겠습니까?"),
@@ -264,7 +343,7 @@ func (a *App) runSinglePort(p uint16) error {
 }
 
 func (a *App) runPortRange(start, end uint16) error {
-	fmt.Fprintf(a.Out, "%s 포트 %s%d-%d%s 범위를 스캔 중입니다...\n",
+	a.logProgress("%s 포트 %s%d-%d%s 범위를 스캔 중입니다...\n",
 		headerStyle("🔍"), warnStyle("["), start, end, warnStyle("]"))
 
 	infos, err := a.Ops.FindByPortRange(start, end)
@@ -272,6 +351,9 @@ func (a *App) runPortRange(start, end uint16) error {
 		return err
 	}
 	if len(infos) == 0 {
+		if a.JSON {
+			return a.printJSON(infos)
+		}
 		fmt.Fprintf(a.Out, "%s 포트 %d-%d 범위에서 사용 중인 포트를 찾을 수 없습니다.\n", warnStyle("⚠️"), start, end)
 		return nil
 	}
@@ -285,6 +367,10 @@ func (a *App) runPortRange(start, end uint16) error {
 	fmt.Fprintln(a.Out)
 
 	if a.ForceKill {
+		if a.DryRun {
+			fmt.Fprintf(a.Out, "%s %s\n", dimStyle("ℹ️"), valueStyle(fmt.Sprintf("(dry-run) %d개 프로세스를 종료하지 않습니다.", len(infos))))
+			return nil
+		}
 		fmt.Fprintf(a.Out, "%s 총 %d개 프로세스를 강제 종료합니다...\n", warnStyle("🔥"), len(infos))
 		for _, info := range infos {
 			if err := a.killWith(info.PID); err != nil {
@@ -320,7 +406,7 @@ func (a *App) runAI() error {
 	a.printTable(infos)
 	fmt.Fprintln(a.Out)
 
-	fmt.Fprintf(a.Out, "%s %s 분석 중입니다...\n", headerStyle("🤖"), dimStyle("Ollama("+model+")"))
+	a.logProgress("%s %s 분석 중입니다...\n", headerStyle("🤖"), dimStyle("Ollama("+model+")"))
 
 	// cmd는 pkg/port 데이터만 알므로 pkg/ai 타입으로 변환합니다.
 	services := make([]ai.Service, len(infos))
@@ -356,9 +442,9 @@ func (a *App) printJSON(infos []*port.ProcessInfo) error {
 		PID  int32  `json:"pid"`
 		Name string `json:"name"`
 	}
-	entries := make([]entry, len(infos))
-	for i, info := range infos {
-		entries[i] = entry{Port: info.Port, PID: info.PID, Name: info.Name}
+	entries := make([]entry, 0, len(infos))
+	for _, info := range infos {
+		entries = append(entries, entry{Port: info.Port, PID: info.PID, Name: info.Name})
 	}
 	enc := json.NewEncoder(a.Out)
 	enc.SetIndent("", "  ")
@@ -383,9 +469,17 @@ func (a *App) readConfirm() bool {
 // ─── Cobra 설정 ───────────────────────────────────────────────────────────────
 
 func Execute() {
+	if noColor {
+		color.NoColor = true
+	}
 	if err := rootCmd.Execute(os.Args[1:]); err != nil {
+		var exitErr *ExitError
+		code := ExitCodeError
+		if errors.As(err, &exitErr) {
+			code = exitErr.Code
+		}
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(code)
 	}
 }
 
@@ -406,10 +500,15 @@ func init() {
 
 	rootCmd.Flags().StringVar(&portStr, "port", "p", "", "검색할 포트 번호 또는 범위 (예: 8080, 3000-4000)")
 	rootCmd.Flags().BoolVar(&forceKill, "force", "f", false, "확인 없이 즉시 프로세스 종료")
+	rootCmd.Flags().BoolVar(&yesFlag, "yes", "y", false, "확인 없이 즉시 프로세스 종료 (--force 별칭)")
 	rootCmd.Flags().BoolVar(&listMode, "list", "l", false, "현재 사용 중인 모든 포트 목록 출력")
 	rootCmd.Flags().BoolVar(&jsonOut, "json", "j", false, "JSON 형식으로 출력")
 	rootCmd.Flags().BoolVar(&graceful, "graceful", "g", false, "SIGTERM 후 5초 대기, 이후 SIGKILL (Graceful 종료)")
 	rootCmd.Flags().BoolVar(&aiMode, "ai", "a", false, "LLM(Ollama)으로 현재 사용 중 포트를 분석 (목록 분석 전용)")
+	rootCmd.Flags().BoolVar(&dryRun, "dry-run", "n", false, "실제 프로세스를 종료하지 않고 시뮬레이션")
+	rootCmd.Flags().BoolVar(&quiet, "quiet", "q", false, "진행 및 안내 메시지 억제")
+	rootCmd.Flags().BoolVar(&noInput, "no-input", "", false, "대화형 입력을 비활성화하고 비대화형 모드로 실행")
+	rootCmd.Flags().BoolVar(&noColor, "no-color", "", false, "컬러 출력을 비활성화")
 	rootCmd.Flags().StringVar(&aiModel, "ai-model", "", "", "AI 분석에 사용할 Ollama 모델 (기본: 설정값 또는 qwen3:4b)")
 	rootCmd.Flags().StringVar(&aiBaseURL, "ai-base-url", "", "", "AI 분석에 사용할 LLM 엔드포인트 (기본: 설정값 또는 http://localhost:11434/v1)")
 	rootCmd.Flags().DurationVar(&cfgTimeout, "ai-timeout", "", 0, "AI 분석 요청 타임아웃 (기본: 설정값 또는 1m, 예: 90s)")

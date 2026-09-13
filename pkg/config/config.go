@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -19,7 +20,7 @@ const (
 	DefaultBaseURL = "http://localhost:11434/v1"
 	// DefaultTimeout은 AI 요청 기본 타임아웃입니다.
 	DefaultTimeout = 60 * time.Second
-	// FileName은 설정 파일명입니다 (~/.poff.json).
+	// FileName은 레거시 설정 파일명입니다 (~/.poff.json).
 	FileName = ".poff.json"
 )
 
@@ -58,18 +59,45 @@ type Config struct {
 	AI AIConfig `json:"ai"`
 }
 
-// DefaultPath는 홈 디렉터리 기준 설정 파일 경로를 반환합니다.
+// DefaultPath는 레거시 홈 디렉터리 기준 설정 파일 경로를 반환합니다 (~/.poff.json).
 func DefaultPath(home string) string {
 	return filepath.Join(home, FileName)
 }
 
-// ResolvePath는 실제 홈 디렉터리를 조회해 설정 파일 경로를 반환합니다.
+// XDGPath는 플랫폼 관례(XDG)에 따른 설정 파일 기본 경로를 반환합니다.
+// - Windows: %APPDATA%/poff/config.json
+// - Linux/macOS: $XDG_CONFIG_HOME/poff/config.json 또는 ~/.config/poff/config.json
+func XDGPath(home string) string {
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			return filepath.Join(appData, "poff", "config.json")
+		}
+	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "poff", "config.json")
+	}
+	return filepath.Join(home, ".config", "poff", "config.json")
+}
+
+// ResolvePath는 환경변수, 기존 레거시 파일, XDG 표준 경로 순으로 설정 파일 경로를 반환합니다.
+// 1. POFF_CONFIG 환경변수가 지정된 경우 최우선 사용
+// 2. 레거시 파일(~/.poff.json)이 이미 존재하면 하위 호환을 위해 사용
+// 3. 기본값: XDG 표준 경로
 func ResolvePath(homeDir func() (string, error)) (string, error) {
+	if env := os.Getenv("POFF_CONFIG"); env != "" {
+		return env, nil
+	}
 	home, err := homeDir()
 	if err != nil {
 		return "", fmt.Errorf("홈 디렉터리를 찾을 수 없습니다: %w", err)
 	}
-	return DefaultPath(home), nil
+
+	legacy := DefaultPath(home)
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy, nil
+	}
+
+	return XDGPath(home), nil
 }
 
 // Load는 설정 파일을 읽어 Config를 반환합니다.
@@ -164,10 +192,17 @@ func Apply(file, flags AIConfig) AIConfig {
 }
 
 // write는 Config를 사람이 읽기 좋은 JSON(2-space indent)으로 저장합니다.
+// 대상 디렉터리가 존재하지 않으면 자동으로 생성합니다.
 func write(cfg Config, path string) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("설정 직렬화 실패: %w", err)
+	}
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("설정 디렉터리 생성 실패 (%s): %w", dir, err)
+		}
 	}
 	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
 		return fmt.Errorf("설정 파일 저장 실패 (%s): %w", path, err)
