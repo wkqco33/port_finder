@@ -30,8 +30,8 @@ github.com/tklauser/numcpus v0.11.0 h1:nSTwhKH5e1dMNsCdVBukSZrURJRoHbSEQjdEbY+9R
 github.com/tklauser/numcpus v0.11.0/go.mod h1:z+LwcLq54uWZTX0u/bGobaV34u6V7KNlTZejzM6/3MQ=
 github.com/wkqco33/LLM_client_go v0.1.0 h1:oYw6sSe5yinBu+FtSQw2TJ6wW8XSqDA516L4ikSmyEc=
 github.com/wkqco33/LLM_client_go v0.1.0/go.mod h1:Se3UP/dQmR0JKLuTeO4WAeo8Kw8hT9QxdT9JR1uRSTU=
-github.com/wkqco33/wcli v0.2.0 h1:f4hbJ8XtNTDXLInnftAaKeJwmWu5VaTa5QxSmrKbGUY=
-github.com/wkqco33/wcli v0.2.0/go.mod h1:4ENGpQ6fBCBNJxfMEYqro1SrosRjrrEreGeJXQsoolo=
+github.com/wkqco33/wcli v0.2.3 h1:ebpHWznoZIY9mhBl8gBAlEUW32DO/4bRUD8bgPflaZc=
+github.com/wkqco33/wcli v0.2.3/go.mod h1:4ENGpQ6fBCBNJxfMEYqro1SrosRjrrEreGeJXQsoolo=
 github.com/yusufpapurcu/wmi v1.2.4 h1:zFUKzehAFReQwLys1b/iSMl+JQGSCSjtVqQn9bBrPo0=
 github.com/yusufpapurcu/wmi v1.2.4/go.mod h1:SBZ9tNy3G9/m5Oi98Zks0QjeHVDvuK0qfxQmPyzfmi0=
 golang.org/x/sys v0.0.0-20190916202348-b4ddaad3f8a3/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
