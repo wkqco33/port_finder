@@ -21,8 +21,9 @@ main.go                진입점 (cmd.Execute() 호출만)
 cmd/                   CLI 레이어 — wcli 명령 정의 + 입출력/흐름 오케스트레이션
   root.go              루트 커맨드 (포트 검색/종료, --ai, 플래그 및 스트림)
   config_cmd.go        config 서브커맨드 (show/init/set)
+  check_cmd.go         check 서브커맨드 (로컬 포트 상태 / 원격 TCP 도달성)
 pkg/
-  port/                도메인 로직 — 포트 조회/프로세스 종료 (gopsutil 격리)
+  port/                도메인 로직 — 포트 조회/프로세스 종료 (gopsutil 격리) + Checker(로컬/원격 확인)
   ai/                  AI 로직 — Ollama/LLM 포트 분석 및 프롬프트 빌더
   config/              설정 관리 — XDG 규약/환경변수/레거시 파일 로드/저장
 .github/workflows/      CI 게이트 (ci.yml) + 릴리스 (release.yml)
@@ -50,6 +51,7 @@ Taskfile.yml           빌드/테스트 태스크 래퍼
 - `pkg/port`: **`Finder` 구조체 + `Option` 함수 옵션**
   - `port.NewFinder(port.WithConnectionSource(fake), port.WithProcessSource(fake))`
   - `Process`, `ConnectionSource`, `ProcessSource` 인터페이스를 통해서만 OS에 접근.
+  - `port.NewChecker(port.WithFinder(f), port.WithDialer(fake))`: 원격 확인은 `Dialer` 인터페이스로만 네트워크에 접근(단위 테스트에서 실제 연결 금지).
 - `pkg/ai`: **`Analyzer` 구조체 + `Option` 함수 옵션**
   - `ai.NewAnalyzer(ai.WithChatClient(fake), ai.WithModel(...), ai.WithBaseURL(...))`
   - `ChatClient` 인터페이스를 통해 실제 네트워크 통신 없이 가상 응답 테스트.
@@ -86,13 +88,16 @@ Taskfile.yml           빌드/테스트 태스크 래퍼
 | 파일 | 태그 | 성격 |
 | ------ | ------ | ------ |
 | `pkg/port/port_unit_test.go` | `//go:build !integration` | **hermetic 단위 테스트** (페이크 주입). 기본 실행. |
+| `pkg/port/check_unit_test.go` | `//go:build !integration` | **hermetic 단위 테스트** (페이크 소켓 소스/Dialer). 기본 실행. |
 | `pkg/port/port_test.go` | `//go:build integration` | **통합 테스트** (실제 소켓/OS 프로세스). 별도 실행. |
+| `pkg/port/check_integration_test.go` | `//go:build integration` | **통합 테스트** (실제 리스너/연결). 별도 실행. |
 | `pkg/ai/ai_test.go` | (없음) | **hermetic 단위 테스트** (페이크 ChatClient). |
 | `pkg/ai/prompt_test.go` | (없음) | **순수 단위 테스트** (프롬프트 빌더). |
 | `pkg/ai/ai_integration_test.go` | `//go:build integration` | **통합 테스트** (로컬 Ollama 연결, 미실행 시 Skip). |
 | `pkg/config/config_test.go` | (없음) | **hermetic 단위 테스트** (TempDir 파일 IO). |
 | `cmd/root_test.go` | (없음) | **hermetic 단위 테스트** (페이크 ops/AI + 버퍼 스트림). |
 | `cmd/config_cmd_test.go` | (없음) | **hermetic 단위 테스트** (페이크 경로 + 버퍼 스트림). |
+| `cmd/check_cmd_test.go` | (없음) | **hermetic 단위 테스트** (페이크 check ops + 버퍼 스트림). |
 
 - **기본 `go test ./...`는 반드시 빠르고(목표 < 1s), OS 비의존, 결정적이어야 합니다.**
   - 실제 네트워크를 열거나 OS 프로세스를 띄우는 테스트를 기본 스위트에 넣지 마세요 → `integration` 태그로 분리.

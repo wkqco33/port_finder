@@ -18,6 +18,8 @@
 - **프로세스 종료**: 검색된 프로세스를 사용자 확인 후 안전하게 강제 종료(Kill)할 수 있습니다.
 - **Graceful 종료**: SIGTERM을 먼저 보내고 5초 후 응답 없으면 SIGKILL로 에스컬레이션합니다.
 - **AI 포트 분석**: `--ai` 옵션으로 현재 사용 중인 포트 전체를 LLM(Ollama)에게 분석시켜 서비스 용도 추정, 위험도, 정리 제안을 받습니다.
+- **포트 상태 확인 (`check`)**: 특정 포트가 로컬에서 수신 대기(LISTEN/UDP 바인딩) 중인지 확인하고, 바인딩 주소·프로토콜·점유 프로세스를 함께 보여줍니다.
+- **원격 도달성 확인**: `check -H <HOST>`로 특정 IP/도메인의 포트와 TCP 통신이 되는지 판정합니다(`open`/`closed`/`filtered`/`unreachable`/`error`). ICMP(ping)와 달리 포트 단위 확인이 가능합니다.
 - **JSON 출력**: 스크립트 자동화 파이프라인을 위한 JSON 형식 출력을 지원합니다.
 - **크로스플랫폼**: Linux, macOS, Windows 모두 지원합니다.
 
@@ -79,6 +81,10 @@ Config Commands:
   poff config show     현재 유효 설정 표시 (출처 포함)
   poff config init     기본값 설정 파일 생성 (XDG 표준 경로)
   poff config set KEY VALUE  설정 값 변경 (예: poff config set ai.model llama3.2)
+
+Check Commands:
+  poff check -p PORT [-H HOST] [-t TIMEOUT] [-j] [-q]
+                       포트 상태 확인 (로컬 바인딩 / 원격 TCP 도달성)
 ```
 
 ### 실행 예시
@@ -187,6 +193,50 @@ poff config set ai.timeout 90s
 설정 우선순위는 **CLI 플래그 > 설정 파일 > 기본값**이며, 일회성 변경은
 `poff --ai --ai-model llama3.2`처럼 플래그로 덮어쓸 수 있습니다.
 
+#### **포트 상태 확인 (check)**
+
+```bash
+# 로컬: 8080 포트가 수신 대기 중인지 + 점유 프로세스 확인
+$ poff check -p 8080
+🔍 포트 8080 로컬 사용 여부를 확인 중입니다...
+✅ 포트 8080: LISTEN 중 (수신 대기)
+   • PROTO      : tcp
+   • ADDRESS    : 0.0.0.0:8080
+   • STATE      : LISTEN
+   • PID        : 1234
+   • NAME       : node
+
+# 로컬: 범위 스캔 (사용 중인 포트만 표로 표시)
+poff check -p 8000-8010
+
+# 원격: 특정 IP/도메인의 포트와 통신되는지 확인 (TCP 핸드셰이크)
+$ poff check -H 192.168.0.10 -p 8080
+🔍 192.168.0.10:8080 (3s) 도달성을 확인 중입니다...
+✅ 192.168.0.10:8080 → open
+
+# 타임아웃/JSON/조용한 모드
+poff check -H db.internal -p 5432 -t 5s
+poff check -H 192.168.0.10 -p 8000-8010 --json
+poff check -p 8080 -q
+```
+
+원격 확인 결과:
+
+| 상태 | 의미 |
+| :--- | :--- |
+| `open` | TCP 연결 성공 (서비스가 수신 대기 중) |
+| `closed` | 연결 거부(RST) — 호스트는 응답하지만 해당 포트가 닫혀 있음 |
+| `filtered` | 응답 없음(타임아웃) — 방화벽 DROP 또는 호스트 다운 가능성 |
+| `unreachable` | 라우팅 실패 (`EHOSTUNREACH`/`ENETUNREACH`) |
+| `error` | 판정 불가 (이름 해석 실패 등), 원인은 `detail`/괄호 안에 표시 |
+
+- 결과 데이터는 stdout, 진행/요약 메시지는 stderr로 출력합니다.
+- `--json`은 항상 유효한 JSON 배열을 출력하며, 로컬 확인에서 바인딩이 있는 포트만 포함합니다(없으면 `[]`).
+- 원격 범위 확인은 최대 16개까지 병렬로 시도하고 결과는 포트 오름차순으로 출력합니다.
+- UDP는 핸드셰이크가 없어 **로컬 바인딩 확인만** 가능합니다(원격 확인은 TCP 기준).
+
+종료 코드: 확인 대상이 수신 대기(`LISTEN`/UDP 바인딩)이거나 원격 연결이 성공(`open`)이면 `0`, 그 외는 `1`입니다(스크립트 연동용).
+
 #### **JSON 출력**
 
 ```bash
@@ -210,7 +260,7 @@ $ poff -p 8080 -j
 | :---: | :--- | :--- |
 | `0` | `ExitCodeSuccess` | 명령이 성공적으로 실행됨 (또는 포트 검색 완료) |
 | `1` | `ExitCodeError` | 프로세스 종료 실패, 권한 부족 등 일반 런타임 오류 |
-| `2` | `ExitCodeUsage` | 잘못된 포트 번호 형식 또는 상호 배타적 플래그 사용 |
+| `2` | `ExitCodeUsage` | 잘못된 포트 번호 형식, 상호 배타적 플래그 사용, 알 수 없는 플래그/서브커맨드 |
 | `3` | `ExitCodePromptRequired` | 비대화형(CI/파이프) 환경에서 `--force(-f)` 또는 `--yes(-y)` 없이 실행 |
 
 ## 디렉터리 구조

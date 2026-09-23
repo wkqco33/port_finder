@@ -5,11 +5,15 @@ package port
 import (
 	"fmt"
 	"sort"
+	"syscall"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/process"
 )
+
+// unknownProcessName은 프로세스 이름을 조회할 수 없을 때 사용하는 대체 이름입니다.
+const unknownProcessName = "unknown"
 
 // ProcessInfo는 포트를 사용 중인 프로세스의 핵심 데이터 구조체입니다.
 type ProcessInfo struct {
@@ -89,13 +93,82 @@ func NewFinder(opts ...Option) *Finder {
 func (f *Finder) getProcessName(pid int32) string {
 	p, err := f.procs.NewProcess(pid)
 	if err != nil {
-		return "unknown"
+		return unknownProcessName
 	}
 	name, err := p.Name()
 	if err != nil {
-		return "unknown"
+		return unknownProcessName
 	}
 	return name
+}
+
+// protoName은 gopsutil 소켓 타입/패밀리를 프로토콜 이름으로 변환합니다.
+// 소켓 타입을 알 수 없는 플랫폼에서는 TCP로 간주합니다.
+func protoName(sockType, family uint32) string {
+	v6 := family == uint32(syscall.AF_INET6)
+	switch sockType {
+	case uint32(syscall.SOCK_DGRAM):
+		if v6 {
+			return "udp6"
+		}
+		return "udp"
+	default:
+		if v6 {
+			return "tcp6"
+		}
+		return "tcp"
+	}
+}
+
+// BindingsByPortRange는 start~end 범위의 로컬 소켓 바인딩 내역을 상세 정보와 함께 반환합니다.
+// PID가 없는 커널 소켓도 바인딩 사실 자체는 유효하므로 포함하며(이름은 unknown),
+// 결과는 포트 → 프로토콜 → IP 오름차순으로 정렬합니다.
+func (f *Finder) BindingsByPortRange(start, end uint16) ([]Binding, error) {
+	conns, err := f.conns.Connections("inet")
+	if err != nil {
+		return nil, fmt.Errorf("네트워크 정보를 가져올 수 없습니다: %w", err)
+	}
+
+	nameCache := make(map[int32]string)
+	getProcName := func(pid int32) string {
+		// PID 0(커널 소켓)은 프로세스 조회 대상이 아닙니다.
+		if pid <= 0 {
+			return unknownProcessName
+		}
+		if name, ok := nameCache[pid]; ok {
+			return name
+		}
+		name := f.getProcessName(pid)
+		nameCache[pid] = name
+		return name
+	}
+
+	var bindings []Binding
+	for i := range conns {
+		p := uint16(conns[i].Laddr.Port)
+		if p < start || p > end {
+			continue
+		}
+		bindings = append(bindings, Binding{
+			Port:  p,
+			IP:    conns[i].Laddr.IP,
+			Proto: protoName(conns[i].Type, conns[i].Family),
+			State: conns[i].Status,
+			PID:   conns[i].Pid,
+			Name:  getProcName(conns[i].Pid),
+		})
+	}
+
+	sort.SliceStable(bindings, func(i, j int) bool {
+		if bindings[i].Port != bindings[j].Port {
+			return bindings[i].Port < bindings[j].Port
+		}
+		if bindings[i].Proto != bindings[j].Proto {
+			return bindings[i].Proto < bindings[j].Proto
+		}
+		return bindings[i].IP < bindings[j].IP
+	})
+	return bindings, nil
 }
 
 type portPid struct {
@@ -110,39 +183,29 @@ func (f *Finder) FindByPort(targetPort uint16) ([]*ProcessInfo, error) {
 }
 
 // FindByPortRange는 start~end 범위 안에서 사용 중인 포트의 프로세스를 모두 반환합니다.
+// 바인딩 상세 정보는 BindingsByPortRange에서 가져오고, (포트, PID) 기준으로 중복을 제거합니다.
 func (f *Finder) FindByPortRange(start, end uint16) ([]*ProcessInfo, error) {
-	conns, err := f.conns.Connections("inet")
+	bindings, err := f.BindingsByPortRange(start, end)
 	if err != nil {
-		return nil, fmt.Errorf("네트워크 정보를 가져올 수 없습니다: %w", err)
+		return nil, err
 	}
 
 	seen := make(map[portPid]bool)
 	var results []*ProcessInfo
-
-	nameCache := make(map[int32]string)
-	getProcName := func(pid int32) string {
-		if name, ok := nameCache[pid]; ok {
-			return name
-		}
-		name := f.getProcessName(pid)
-		nameCache[pid] = name
-		return name
-	}
-
-	for i := range conns {
-		p := uint16(conns[i].Laddr.Port)
-		if p < start || p > end || conns[i].Pid <= 0 {
+	for _, b := range bindings {
+		// PID가 없는 커널 소켓은 프로세스 정보가 없으므로 제외합니다.
+		if b.PID <= 0 {
 			continue
 		}
-		key := portPid{port: p, pid: conns[i].Pid}
+		key := portPid{port: b.Port, pid: b.PID}
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
 		results = append(results, &ProcessInfo{
-			PID:  conns[i].Pid,
-			Name: getProcName(conns[i].Pid),
-			Port: p,
+			PID:  b.PID,
+			Name: b.Name,
+			Port: b.Port,
 		})
 	}
 

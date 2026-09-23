@@ -7,6 +7,23 @@
 
 ## [Unreleased]
 
+### 추가
+
+- `check` 서브커맨드: 포트 상태 확인 기능
+  - 로컬 확인(`poff check -p 8080`): 포트 바인딩 여부와 프로토콜/주소/상태(LISTEN, NONE 등)/점유 프로세스를 출력. TCP는 `LISTEN`, UDP는 바인딩 여부로 수신 대기를 판정
+  - 로컬 범위 확인(`poff check -p 8000-8010`): 범위 내 사용 중인 포트를 표로 출력(미사용 포트는 제외)
+  - 원격 확인(`poff check -H 192.168.0.10 -p 8080`): ICMP(ping)와 달리 **포트 단위 TCP 도달성**을 확인하고 `open`/`closed`/`filtered`/`unreachable`/`error`로 판정
+  - 플래그: `-p/--port`, `-H/--host`, `-t/--timeout`(기본 3s), `-j/--json`, `-q/--quiet`, `--no-color`
+  - 원격 범위 확인은 최대 16개까지 병렬 시도하며 결과는 포트 오름차순으로 출력
+  - `--json`은 stdout에만 유효한 JSON 배열을 출력(바인딩/결과가 없으면 `[]`), 진행/요약은 stderr
+  - 확인 결과에 따른 종료 코드: 수신 대기 또는 연결 성공(`open`)이면 `0`, 그 외는 `1`
+- `pkg/port`에 `Finder.BindingsByPortRange`(소켓 바인딩 상세)와 `Checker`(`CheckLocal`/`CheckLocalRange`/`CheckRemote`, `Dialer` 주입) 추가
+- OS 비의존 단위 테스트(페이크 `ConnectionSource`/`Dialer`) 및 실제 소켓 통합 테스트(`-tags integration`) 추가
+
+### 수정
+
+- 알 수 없는 플래그/서브커맨드 등 CLI 파싱 실패 시 종료 코드가 `1`이 아닌 `2(ExitCodeUsage)`로 반환되도록 수정
+
 ## [0.4.0] - 2026-09-13
 
 ### 추가

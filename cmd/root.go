@@ -54,6 +54,16 @@ func promptRequiredError(msg string) error {
 	return &ExitError{Code: ExitCodePromptRequired, Err: errors.New(msg)}
 }
 
+// silentExitError는 메시지 출력 없이 종료 코드만 전달하는 에러입니다.
+// check 명령처럼 결과 자체가 이미 stdout으로 출력된 경우 stderr 중복 출력을 피합니다.
+type silentExitError struct {
+	code int
+}
+
+func (e *silentExitError) Error() string {
+	return fmt.Sprintf("exit code %d", e.code)
+}
+
 var (
 	portStr    string
 	forceKill  bool
@@ -473,10 +483,24 @@ func Execute() {
 		color.NoColor = true
 	}
 	if err := rootCmd.Execute(os.Args[1:]); err != nil {
+		// check처럼 결과를 이미 출력한 명령은 메시지 없이 상태 코드만 반환합니다.
+		var silent *silentExitError
+		if errors.As(err, &silent) {
+			os.Exit(silent.code)
+		}
+
 		var exitErr *ExitError
 		code := ExitCodeError
-		if errors.As(err, &exitErr) {
+		switch {
+		case errors.As(err, &exitErr):
 			code = exitErr.Code
+		default:
+			// 플래그/인자 파싱 실패는 사용 오류(2)로 구분합니다 (clig.dev).
+			var flagErr *wcli.FlagError
+			var valErr *wcli.ValidationError
+			if errors.As(err, &flagErr) || errors.As(err, &valErr) {
+				code = ExitCodeUsage
+			}
 		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(code)
@@ -513,8 +537,8 @@ func init() {
 	rootCmd.Flags().StringVar(&aiBaseURL, "ai-base-url", "", "", "AI 분석에 사용할 LLM 엔드포인트 (기본: 설정값 또는 http://localhost:11434/v1)")
 	rootCmd.Flags().DurationVar(&cfgTimeout, "ai-timeout", "", 0, "AI 분석 요청 타임아웃 (기본: 설정값 또는 1m, 예: 90s)")
 
-	// config 서브커맨드 (show/init/set)를 등록합니다.
-	rootCmd.AddCommand(newConfigCommand())
+	// config/check 서브커맨드(show/init/set, check)를 등록합니다.
+	rootCmd.AddCommand(newConfigCommand(), newCheckCommand())
 
 	// wcli는 Version 필드가 설정되면 --version 플래그를 자동으로 등록합니다.
 }
